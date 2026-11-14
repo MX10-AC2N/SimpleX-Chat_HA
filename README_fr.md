@@ -21,6 +21,14 @@ SimpleX est un messager privé par conception (pas d’identifiants utilisateurs
 
 ---
 
+## Docker / Home Assistant en conteneurs
+
+Si Home Assistant tourne sous Docker, vous **devez** lancer un daemon SimpleX Chat en mode WebSocket à côté.
+
+→ Guide complet : **[DOCKER.md](DOCKER.md)** (exemples Compose, réseau, dépannage).
+
+---
+
 ## Prérequis
 
 1. **SimpleX Chat CLI** en mode WebSocket :
@@ -29,15 +37,8 @@ SimpleX est un messager privé par conception (pas d’identifiants utilisateurs
 simplex-chat -p 5225
 ```
 
-Exemple Docker minimal :
-
-```bash
-docker run -d --name simplex-ws \
-  -p 5225:5225 \
-  -v simplex-data:/home/user/.local/share/simplex \
-  --restart unless-stopped \
-  <image-simplex-ws>
-```
+Avec Home Assistant en Docker, ne pas utiliser `127.0.0.1` depuis le conteneur HA.
+Voir le guide dédié : **[DOCKER.md](DOCKER.md)**.
 
 2. Home Assistant **2025.8+** (recommandé 2026.x).
 
