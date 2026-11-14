@@ -1,12 +1,12 @@
 {
   "domain": "simplex",
   "name": "SimpleX Chat",
-  "codeowners": ["@your-github-username"],
+  "codeowners": ["@MX10-AC2N"],
   "config_flow": true,
-  "documentation": "https://github.com/YOUR_USERNAME/ha-simplex-chat",
+  "documentation": "https://github.com/MX10-AC2N/SimpleX-Chat_HA",
   "integration_type": "hub",
   "iot_class": "local_push",
-  "issue_tracker": "https://github.com/YOUR_USERNAME/ha-simplex-chat/issues",
+  "issue_tracker": "https://github.com/MX10-AC2N/SimpleX-Chat_HA/issues,
   "loggers": ["custom_components.simplex"],
   "requirements": [],
   "version": "1.0.0"
