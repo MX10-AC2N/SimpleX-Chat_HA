@@ -113,12 +113,8 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             elif not link:
                 errors["invite_link"] = "required"
             else:
-                # Quick sanity check
-                is_simplex = (
-                    (link.startswith("http") and "simplex" in link)
-                    or link.startswith("simplex:")
-                )
-                if not is_simplex:
+                # Soft check only — many valid relays use smp*.simplex.im /i#…
+                if not _looks_like_simplex_link(link):
                     errors["base"] = ERROR_INVALID_LINK
                 else:
                     current = dict(self.config_entry.options.get(CONF_TARGETS, {}))
@@ -127,10 +123,9 @@ class OptionsFlowHandler(OptionsFlowWithReload):
                     else:
                         result = await self._accept_invite(alias, link)
                         if isinstance(result, str):
-                            # error key
                             errors["base"] = result
                         else:
-                            return result  # ConfigEntry update
+                            return result
 
         return self.async_show_form(
             step_id="add_contact",
@@ -231,9 +226,8 @@ class OptionsFlowHandler(OptionsFlowWithReload):
                 message,
                 getattr(err, "payload", None),
             )
-            if any(k in combined for k in ("invalid", "bad link", "bad_link", "parse", "decode")):
-                return ERROR_INVALID_LINK
-            if any(k in combined for k in ("expired", "revoked", "unknown", "not found")):
+            # Only map clearly expired/revoked — never label a CLI/network failure as "invalid link"
+            if any(k in combined for k in ("expired", "revoked")):
                 return "invite_expired"
             return ERROR_INVITE_FAILED
         except Exception:  # noqa: BLE001

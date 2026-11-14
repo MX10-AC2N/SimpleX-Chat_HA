@@ -296,13 +296,27 @@ class SimplexWsClient:
             {"chat_ref": "@<contactId>" | "#<groupId>", "initial": {...}, "event": {...}?}
         """
         link = (link or "").strip()
-        # Strip accidental markdown / angle brackets from copy-paste
+        # Strip accidental markdown / angle brackets / whitespace from copy-paste
         if link.startswith("<") and link.endswith(">"):
             link = link[1:-1].strip()
+        link = link.strip().strip('"').strip("'")
         _LOGGER.debug("accept_invite_link: start (timeout=%.0fs)", timeout)
-        # Quote the link: fragments contain # / + = which break the CLI parser otherwise
+
+        # Try quoted first (special chars in #fragment), then unquoted
         safe = link.replace("'", "")
-        initial = await self._rpc_cmd(f"/connect '{safe}'", timeout=timeout)
+        initial: dict[str, Any]
+        last_err: Exception | None = None
+        for cmd in (f"/connect '{safe}'", f"/connect {safe}"):
+            try:
+                initial = await self._rpc_cmd(cmd, timeout=timeout)
+                last_err = None
+                break
+            except SimplexWsError as err:
+                last_err = err
+                _LOGGER.debug("accept_invite_link: cmd failed (%s): %s", cmd.split(" ", 1)[0], err)
+                continue
+        if last_err is not None:
+            raise last_err
 
         # Already known contact
         if initial.get("type") == "contactAlreadyExists":
