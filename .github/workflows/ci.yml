@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  structure:
+    name: Integration structure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required files
+        run: |
+          set -e
+          test -f hacs.json
+          test -f custom_components/simplex/manifest.json
+          test -f custom_components/simplex/__init__.py
+          test -f custom_components/simplex/const.py
+          test -f custom_components/simplex/config_flow.py
+          echo "✅ Required files present"
+
+      - name: Validate JSON
+        run: |
+          python3 -c "import json; json.load(open('hacs.json'))"
+          python3 -c "import json; json.load(open('custom_components/simplex/manifest.json'))"
+          python3 -c "import json; json.load(open('custom_components/simplex/strings.json'))"
+          python3 -c "import json; json.load(open('custom_components/simplex/translations/en.json'))"
+          python3 -c "import json; json.load(open('custom_components/simplex/translations/fr.json'))"
+          echo "✅ JSON files are valid"
+
+      - name: Validate manifest fields
+        run: |
+          python3 << 'PY'
+          import json, sys
+          m = json.load(open("custom_components/simplex/manifest.json"))
+          required = ["domain", "name", "version", "documentation", "issue_tracker", "codeowners", "config_flow"]
+          missing = [k for k in required if k not in m]
+          if missing:
+              print("❌ Missing manifest keys:", missing)
+              sys.exit(1)
+          if m["domain"] != "simplex":
+              print("❌ domain must be 'simplex'")
+              sys.exit(1)
+          print("✅ manifest.json OK – version", m["version"])
+          PY
