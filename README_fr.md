@@ -1,5 +1,7 @@
 # SimpleX Chat for Home Assistant
 
+> 🇬🇧 **English version**: [README.md](README.md)
+
 Intégration HACS complète pour envoyer et recevoir des messages via [SimpleX Chat](https://simplex.chat/) depuis Home Assistant.
 
 SimpleX est un messager privé par conception (pas d’identifiants utilisateurs, E2E, pas de métadonnées). Cette intégration permet d’utiliser SimpleX comme canal de notification et de communication sécurisé pour votre maison.
