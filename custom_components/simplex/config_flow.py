@@ -218,13 +218,22 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             return self.async_create_entry(
                 title="", data={CONF_TARGETS: current}
             )
-        except SimplexWsTimeoutError:
+        except SimplexWsTimeoutError as err:
+            _LOGGER.warning("Invite timeout: %s payload=%s", err, getattr(err, "payload", None))
             return ERROR_TIMEOUT
         except SimplexWsError as err:
-            reason = (err.reason or err.message or "").lower()
-            if any(k in reason for k in ("invalid", "bad link", "bad_link")):
+            reason = (err.reason or "")
+            message = (err.message or "")
+            combined = f"{reason} {message}".lower()
+            _LOGGER.warning(
+                "Invite failed: reason=%s message=%s payload=%s",
+                reason,
+                message,
+                getattr(err, "payload", None),
+            )
+            if any(k in combined for k in ("invalid", "bad link", "bad_link", "parse", "decode")):
                 return ERROR_INVALID_LINK
-            if "expired" in reason or "revoked" in reason:
+            if any(k in combined for k in ("expired", "revoked", "unknown", "not found")):
                 return "invite_expired"
             return ERROR_INVITE_FAILED
         except Exception:  # noqa: BLE001

@@ -295,8 +295,14 @@ class SimplexWsClient:
         Returns:
             {"chat_ref": "@<contactId>" | "#<groupId>", "initial": {...}, "event": {...}?}
         """
+        link = (link or "").strip()
+        # Strip accidental markdown / angle brackets from copy-paste
+        if link.startswith("<") and link.endswith(">"):
+            link = link[1:-1].strip()
         _LOGGER.debug("accept_invite_link: start (timeout=%.0fs)", timeout)
-        initial = await self._rpc_cmd(f"/connect {link}", timeout=timeout)
+        # Quote the link: fragments contain # / + = which break the CLI parser otherwise
+        safe = link.replace("'", "")
+        initial = await self._rpc_cmd(f"/connect '{safe}'", timeout=timeout)
 
         # Already known contact
         if initial.get("type") == "contactAlreadyExists":
@@ -305,12 +311,21 @@ class SimplexWsClient:
             if cid is not None:
                 return {"chat_ref": f"@{cid}", "type": "contact", "initial": initial}
 
+        # Some CLI versions return the contact immediately
+        if initial.get("type") in ("contactConnecting", "sentConfirmation", "sentInvitation"):
+            contact = initial.get("contact") or {}
+            cid = contact.get("contactId")
+            # Keep waiting for readiness, but log progress
+            _LOGGER.debug("accept_invite_link: intermediate type=%s contactId=%s", initial.get("type"), cid)
+
         # Wait for a readiness event
         wanted = {
             "contactConnected",
             "contactSndReady",
             "userJoinedGroup",
             "groupJoined",
+            "acceptingContactRequest",
+            "receivedContactRequest",
         }
         deadline = self._loop.time() + timeout
         while self._loop.time() < deadline:
