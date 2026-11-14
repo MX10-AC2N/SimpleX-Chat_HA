@@ -1,0 +1,125 @@
+# SimpleX Chat – Home Assistant dashboard (English)
+# Import: Settings → Dashboards → Add dashboard → YAML, or include from config.
+
+title: SimpleX Chat
+views:
+  - title: SimpleX
+    path: simplex
+    icon: mdi:message-lock
+    type: sections
+    max_columns: 2
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Connection
+            heading_style: title
+            icon: mdi:lan-connect
+
+          - type: tile
+            entity: binary_sensor.simplex_chat_connection
+            name: WebSocket
+            icon: mdi:transit-connection-variant
+            vertical: false
+            color: primary
+
+          - type: tile
+            entity: sensor.simplex_chat_configured_contacts
+            name: Configured contacts
+            icon: mdi:account-group
+            vertical: false
+
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: binary_sensor.simplex_chat_connection
+                state_not: "on"
+            card:
+              type: markdown
+              content: |
+                ⚠️ **SimpleX is not connected**
+
+                Check that the CLI/container is listening, e.g.:
+                - Docker: `ws://simplex-ws:5225` or `ws://HOST_IP:5225`
+                - See [DOCKER.md](https://github.com/MX10-AC2N/SimpleX-Chat_HA/blob/main/DOCKER.md)
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Last message
+            heading_style: title
+            icon: mdi:message-text
+
+          - type: markdown
+            content: |
+              {% set s = states('sensor.simplex_chat_last_message') %}
+              {% if s not in ['unknown', 'unavailable', 'none', ''] %}
+              **{{ state_attr('sensor.simplex_chat_last_message', 'alias') or '—' }}**
+              {% if state_attr('sensor.simplex_chat_last_message', 'chat_ref') %}
+              `{{ state_attr('sensor.simplex_chat_last_message', 'chat_ref') }}`
+              {% endif %}
+
+              {{ s }}
+              {% else %}
+              *No message received yet.*
+              {% endif %}
+
+          - type: entities
+            entities:
+              - entity: sensor.simplex_chat_last_message
+                name: Text
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Actions
+            heading_style: title
+            icon: mdi:lightning-bolt
+
+          - type: markdown
+            content: |
+              ### Create invitation
+              Generate a link **from the bot** (recommended), then open it in the SimpleX app.
+
+          - type: button
+            name: Create invitation
+            icon: mdi:qrcode-plus
+            tap_action:
+              action: call-service
+              service: simplex.create_invite
+              service_data: {}
+
+          - type: markdown
+            content: |
+              After running the action, check the response in
+              *Developer tools → Actions* (`invite_link` field).
+
+          - type: entities
+            title: Shortcuts
+            show_header_toggle: false
+            entities:
+              - type: weblink
+                name: Configure integration
+                url: /config/integrations/integration/simplex
+                icon: mdi:cog
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Help
+            heading_style: title
+            icon: mdi:help-circle
+
+          - type: markdown
+            content: |
+              **Recommended flow**
+              1. WebSocket connected (tile above)
+              2. **Create invitation** → open link in SimpleX app
+              3. Or paste a phone invite into *Configure* → Add contact
+
+              **Services:** `simplex.create_invite`, `simplex.accept_invite`,
+              `simplex.send_message`, `simplex.list_contacts`
+
+              **Event:** `simplex_message_received`
+
+              📘 [Docs](https://github.com/MX10-AC2N/SimpleX-Chat_HA)
