@@ -1,0 +1,62 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "SimpleX Chat",
+        "description": "Connect Home Assistant to a running SimpleX Chat CLI instance (WebSocket mode).\n\nDefault: `ws://127.0.0.1:5225`",
+        "data": {
+          "ws_url": "WebSocket URL"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to the SimpleX WebSocket. Make sure `simplex-chat -p 5225` is running."
+    },
+    "abort": {
+      "already_configured": "This WebSocket URL is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "SimpleX Chat – Manage contacts",
+        "menu_options": {
+          "add_contact": "Add a contact / group (paste invite link)",
+          "remove_contact": "Remove a contact",
+          "show_targets": "Show configured contacts"
+        }
+      },
+      "add_contact": {
+        "title": "Add contact or group",
+        "description": "Paste a SimpleX invitation link or contact address. A new notify entity will be created.",
+        "data": {
+          "alias": "Friendly name (alias)",
+          "invite_link": "Invitation / contact link"
+        }
+      },
+      "remove_contact": {
+        "title": "Remove contact",
+        "data": {
+          "alias": "Contact to remove"
+        }
+      },
+      "show_targets": {
+        "title": "Configured contacts",
+        "description": "{targets}"
+      }
+    },
+    "error": {
+      "alias_exists": "This alias already exists.",
+      "invite_failed": "Could not accept the invitation.",
+      "invite_invalid": "The link does not look like a valid SimpleX invitation.",
+      "invite_timeout": "Timed out while waiting for the connection to be established.",
+      "invite_expired": "This invitation has expired or been revoked.",
+      "ws_not_connected": "WebSocket is not connected. Check that the SimpleX CLI is running.",
+      "required": "This field is required.",
+      "unknown": "An unexpected error occurred."
+    },
+    "abort": {
+      "no_targets": "No contacts configured yet."
+    }
+  }
+}

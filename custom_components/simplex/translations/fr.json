@@ -1,1 +1,62 @@
-
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "SimpleX Chat",
+        "description": "Connectez Home Assistant à une instance SimpleX Chat CLI en mode WebSocket.\n\nPar défaut : `ws://127.0.0.1:5225`",
+        "data": {
+          "ws_url": "URL WebSocket"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Impossible de se connecter au WebSocket SimpleX. Vérifiez que `simplex-chat -p 5225` est lancé."
+    },
+    "abort": {
+      "already_configured": "Cette URL WebSocket est déjà configurée."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "SimpleX Chat – Gérer les contacts",
+        "menu_options": {
+          "add_contact": "Ajouter un contact / groupe (coller un lien d'invitation)",
+          "remove_contact": "Supprimer un contact",
+          "show_targets": "Afficher les contacts configurés"
+        }
+      },
+      "add_contact": {
+        "title": "Ajouter un contact ou un groupe",
+        "description": "Collez un lien d'invitation SimpleX ou une adresse de contact. Une nouvelle entité notify sera créée.",
+        "data": {
+          "alias": "Nom convivial (alias)",
+          "invite_link": "Lien d'invitation / contact"
+        }
+      },
+      "remove_contact": {
+        "title": "Supprimer un contact",
+        "data": {
+          "alias": "Contact à supprimer"
+        }
+      },
+      "show_targets": {
+        "title": "Contacts configurés",
+        "description": "{targets}"
+      }
+    },
+    "error": {
+      "alias_exists": "Cet alias existe déjà.",
+      "invite_failed": "Impossible d'accepter l'invitation.",
+      "invite_invalid": "Le lien ne semble pas être une invitation SimpleX valide.",
+      "invite_timeout": "Délai dépassé en attendant l'établissement de la connexion.",
+      "invite_expired": "Cette invitation a expiré ou a été révoquée.",
+      "ws_not_connected": "Le WebSocket n'est pas connecté. Vérifiez que le CLI SimpleX est lancé.",
+      "required": "Ce champ est obligatoire.",
+      "unknown": "Une erreur inattendue s'est produite."
+    },
+    "abort": {
+      "no_targets": "Aucun contact configuré pour le moment."
+    }
+  }
+}
