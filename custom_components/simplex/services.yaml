@@ -1,0 +1,70 @@
+send_message:
+  name: Send message
+  description: Send a text message to a configured SimpleX alias (contact or group).
+  fields:
+    alias:
+      name: Alias
+      description: The friendly name of the contact/group as configured in the integration.
+      required: true
+      example: "alice"
+      selector:
+        text:
+    message:
+      name: Message
+      description: The message body to send.
+      required: true
+      example: "Dinner is ready!"
+      selector:
+        text:
+    title:
+      name: Title
+      description: Optional title prepended to the message.
+      required: false
+      example: "Home Alert"
+      selector:
+        text:
+
+create_invite:
+  name: Create invitation
+  description: Generate a one-time SimpleX invitation link from the CLI.
+  fields:
+    entry_id:
+      name: Config entry ID
+      description: Optional. Required only if you have multiple SimpleX integrations.
+      required: false
+      selector:
+        text:
+
+accept_invite:
+  name: Accept invitation
+  description: Accept a SimpleX invitation link and optionally store it as a named alias.
+  fields:
+    invite_link:
+      name: Invitation link
+      description: The SimpleX invitation or contact address link.
+      required: true
+      selector:
+        text:
+    alias:
+      name: Alias
+      description: Optional friendly name. If provided the contact is stored and a notify entity is created.
+      required: false
+      selector:
+        text:
+    entry_id:
+      name: Config entry ID
+      description: Optional. Required only if you have multiple SimpleX integrations.
+      required: false
+      selector:
+        text:
+
+list_contacts:
+  name: List contacts
+  description: Retrieve the list of contacts known by the SimpleX CLI.
+  fields:
+    entry_id:
+      name: Config entry ID
+      description: Optional. Required only if you have multiple SimpleX integrations.
+      required: false
+      selector:
+        text:
