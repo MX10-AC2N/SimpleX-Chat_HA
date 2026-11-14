@@ -1,17 +1,21 @@
 # SimpleX Chat for Home Assistant
 
-**Intégration HACS moderne et complète** pour envoyer (et recevoir) des messages via [SimpleX Chat](https://simplex.chat/) depuis Home Assistant.
+Intégration HACS complète pour envoyer et recevoir des messages via [SimpleX Chat](https://simplex.chat/) depuis Home Assistant.
 
-Basée sur le travail de [jooray/ha-simplex](https://github.com/jooray/ha-simplex), largement améliorée :
+SimpleX est un messager privé par conception (pas d’identifiants utilisateurs, E2E, pas de métadonnées). Cette intégration permet d’utiliser SimpleX comme canal de notification et de communication sécurisé pour votre maison.
 
-- Notifications natives (entité `notify.*` par contact / groupe)
-- Réception de messages → événements HA + capteur
-- Capteur de connexion WebSocket
-- Services avancés (créer une invitation, lister les contacts…)
-- Outil LLM / Assist (`send_simplex_message`)
-- Reconnexion automatique, gestion d’erreurs robuste
-- Traductions FR / EN
-- Prêt pour HACS / Marketplace
+---
+
+## Fonctionnalités
+
+- **Notifications natives** — une entité `notify.*` par contact ou groupe
+- **Réception de messages** — événement `simplex_message_received` + capteur
+- **État de connexion** — `binary_sensor` WebSocket
+- **Services** — envoyer, créer une invitation, accepter un lien, lister les contacts
+- **Outil LLM / Assist** — `send_simplex_message` pour la voix et les agents
+- **Reconnexion automatique** avec backoff exponentiel
+- **Traductions** FR / EN
+- Prêt pour **HACS** et le **Marketplace** Home Assistant
 
 ---
 
@@ -23,14 +27,14 @@ Basée sur le travail de [jooray/ha-simplex](https://github.com/jooray/ha-simple
 simplex-chat -p 5225
 ```
 
-Ou via Docker (recommandé) :
+Exemple Docker minimal :
 
 ```bash
-# Voir https://github.com/jooray/simplex-ws-docker
 docker run -d --name simplex-ws \
   -p 5225:5225 \
-  -v simplex-data:/data \
-  jooray/simplex-ws
+  -v simplex-data:/home/user/.local/share/simplex \
+  --restart unless-stopped \
+  <image-simplex-ws>
 ```
 
 2. Home Assistant **2025.8+** (recommandé 2026.x).
@@ -42,19 +46,17 @@ docker run -d --name simplex-ws \
 ### Via HACS (recommandé)
 
 1. HACS → Intégrations → ⋮ → **Repositories personnalisés**
-2. URL : `https://github.com/YOUR_USERNAME/ha-simplex-chat`
+2. URL : `https://github.com/MX10-AC2N/SimpleX-Chat_HA`
 3. Catégorie : **Integration**
 4. Télécharger → Redémarrer Home Assistant
-5. Paramètres → Appareils & services → Ajouter l’intégration → **SimpleX Chat**
-6. Entrer l’URL WebSocket (défaut `ws://127.0.0.1:5225`)
+5. **Paramètres → Appareils & services → Ajouter l’intégration → SimpleX Chat**
+6. Entrer l’URL WebSocket (défaut : `ws://127.0.0.1:5225`)
 
 ### Installation manuelle
 
 ```bash
 cd /config/custom_components
-git clone https://github.com/YOUR_USERNAME/ha-simplex-chat.git temp
-mv temp/custom_components/simplex .
-rm -rf temp
+# copier le dossier simplex/ depuis ce dépôt
 ```
 
 Redémarrer Home Assistant, puis ajouter l’intégration via l’UI.
@@ -63,19 +65,19 @@ Redémarrer Home Assistant, puis ajouter l’intégration via l’UI.
 
 ## Configuration des contacts
 
-1. Aller dans **Paramètres → Appareils & services → SimpleX Chat → Configurer**
+1. **Paramètres → Appareils & services → SimpleX Chat → Configurer**
 2. Choisir **Ajouter un contact / groupe**
 3. Donner un alias (ex. `Alice`, `Famille`)
 4. Coller le lien d’invitation SimpleX (1:1 ou groupe)
 5. Une entité `notify.simplex_alice` (ou similaire) est créée automatiquement
 
-Vous pouvez aussi supprimer des contacts ou lister ceux déjà configurés depuis le même menu.
+Vous pouvez aussi supprimer des contacts ou les lister depuis le même menu.
 
 ---
 
 ## Utilisation
 
-### Notifications (méthode recommandée)
+### Notifications
 
 ```yaml
 action: notify.send_message
@@ -105,16 +107,15 @@ data:
   title: "Sécurité"
 ```
 
-### Créer une invitation depuis HA
+### Créer une invitation
 
 ```yaml
 action: simplex.create_invite
-# response_variable: invite
 ```
 
 La réponse contient `invite_link`.
 
-### Accepter une invitation via service
+### Accepter une invitation
 
 ```yaml
 action: simplex.accept_invite
@@ -125,7 +126,7 @@ data:
 
 ### Événements reçus
 
-Chaque message entrant déclenche l’événement `simplex_message_received` :
+Chaque message entrant déclenche `simplex_message_received` :
 
 ```yaml
 automation:
@@ -142,27 +143,25 @@ automation:
           message: "{{ trigger.event.data.text }}"
 ```
 
-Données de l’événement :
-
-| Clé          | Description                          |
-|--------------|--------------------------------------|
-| `alias`      | Alias configuré (si trouvé)          |
-| `chat_ref`   | `@123` ou `#456`                     |
-| `text`       | Contenu du message                   |
-| `direction`  | `incoming` / `outgoing`              |
-| `item_id`    | ID interne SimpleX                   |
+| Clé         | Description                     |
+|-------------|---------------------------------|
+| `alias`     | Alias configuré (si trouvé)     |
+| `chat_ref`  | `@123` ou `#456`                |
+| `text`      | Contenu du message              |
+| `direction` | `incoming` / `outgoing`         |
+| `item_id`   | ID interne SimpleX              |
 
 ### Capteurs
 
-| Entité                              | Description                        |
-|-------------------------------------|------------------------------------|
-| `binary_sensor.simplex_chat_connection` | État de la connexion WebSocket |
-| `sensor.simplex_chat_last_message`  | Dernier message reçu               |
-| `sensor.simplex_chat_configured_contacts` | Nombre de contacts             |
+| Entité | Description |
+|--------|-------------|
+| `binary_sensor.simplex_chat_connection` | État WebSocket |
+| `sensor.simplex_chat_last_message` | Dernier message reçu |
+| `sensor.simplex_chat_configured_contacts` | Nombre de contacts |
 
 ### Assist / LLM
 
-L’outil `send_simplex_message` est automatiquement enregistré. Vous pouvez dire :
+L’outil `send_simplex_message` est enregistré automatiquement. Exemple :
 
 > « Envoie un message SimpleX à Alice : j’arrive dans 10 minutes »
 
@@ -178,15 +177,9 @@ Home Assistant
     ├── LLM tool           ──┘                              │
     │                                                       │
     └── events + sensors  ◄─────────────────────────────────┘
-                    (messages entrants, état de connexion)
 ```
 
-Le client WebSocket gère :
-
-- Reconnexion automatique avec backoff exponentiel
-- Corrélation des réponses RPC (`corrId`)
-- Dispatch des événements asynchrones
-- Redaction des liens sensibles dans les logs
+Le client WebSocket gère la reconnexion automatique, la corrélation des réponses RPC (`corrId`), le dispatch des événements et la redaction des liens sensibles dans les logs.
 
 ---
 
@@ -201,32 +194,27 @@ logger:
     custom_components.simplex: debug
 ```
 
-Vérifications courantes :
+Vérifications :
 
 1. `simplex-chat -p 5225` tourne-t-il ?
-2. L’entité `binary_sensor.simplex_chat_connection` est-elle `on` ?
-3. Les logs montrent-ils des erreurs `chatCmdError` ?
+2. `binary_sensor.simplex_chat_connection` est-il `on` ?
+3. Y a-t-il des erreurs `chatCmdError` dans les logs ?
 4. Le lien d’invitation est-il encore valide ?
 
 ---
 
-## Roadmap possible
+## Roadmap
 
-- [ ] Génération d’invitations longue durée (adresse utilisateur)
+- [ ] Adresse utilisateur longue durée
 - [ ] Envoi de fichiers / images
-- [ ] Support multi-profils SimpleX
-- [ ] Carte Lovelace dédiée
-- [ ] Découverte automatique des contacts déjà présents dans le CLI
-
----
-
-## Crédits
-
-- Inspiration et base solide : [jooray/ha-simplex](https://github.com/jooray/ha-simplex)
-- SimpleX Chat : [simplex.chat](https://simplex.chat) – le messager vraiment privé
+- [ ] Multi-profils SimpleX
+- [ ] Carte Lovelace
+- [ ] Découverte des contacts déjà présents dans le CLI
 
 ---
 
 ## Licence
 
 MIT
+
+SimpleX Chat est un projet de [SimpleX Chat Ltd](https://simplex.chat). Cette intégration est un projet communautaire indépendant, non affilié officiellement.
