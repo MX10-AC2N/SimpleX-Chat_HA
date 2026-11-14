@@ -1,6 +1,7 @@
 {
   "domain": "simplex",
   "name": "SimpleX Chat",
+  "categories": ["messaging_notifications.chat_apps"],
   "codeowners": ["@MX10-AC2N"],
   "config_flow": true,
   "documentation": "https://github.com/MX10-AC2N/SimpleX-Chat_HA",
