@@ -23,7 +23,15 @@
         "menu_options": {
           "add_contact": "Add a contact / group (paste invite link)",
           "remove_contact": "Remove a contact",
-          "show_targets": "Show configured contacts"
+          "show_targets": "Show configured contacts",
+          "settings": "Settings (outbox directory)"
+        }
+      },
+      "settings": {
+        "title": "SimpleX Chat – Settings",
+        "description": "{hint}",
+        "data": {
+          "outbox_dir": "Outbox directory"
         }
       },
       "add_contact": {
