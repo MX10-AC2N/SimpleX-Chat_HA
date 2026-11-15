@@ -10,5 +10,5 @@
   "issue_tracker": "https://github.com/MX10-AC2N/SimpleX-Chat_HA/issues",
   "loggers": ["custom_components.simplex"],
   "requirements": [],
-  "version": "2.0.0"
+  "version": "1.0.4"
 }
