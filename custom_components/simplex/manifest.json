@@ -1,14 +1,20 @@
 {
   "domain": "simplex",
   "name": "SimpleX Chat",
-  "categories": ["messaging_notifications.chat_apps"],
-  "codeowners": ["@MX10-AC2N"],
+  "categories": [
+    "messaging_notifications.chat_apps"
+  ],
+  "codeowners": [
+    "@MX10-AC2N"
+  ],
   "config_flow": true,
   "documentation": "https://github.com/MX10-AC2N/SimpleX-Chat_HA",
   "integration_type": "hub",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/MX10-AC2N/SimpleX-Chat_HA/issues",
-  "loggers": ["custom_components.simplex"],
+  "loggers": [
+    "custom_components.simplex"
+  ],
   "requirements": [],
-  "version": "1.0.5"
+  "version": "1.1.0"
 }

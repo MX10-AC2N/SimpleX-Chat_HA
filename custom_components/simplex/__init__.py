@@ -85,6 +85,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             f"Cannot connect to SimpleX websocket at {ws_url}: {exc}"
         ) from exc
 
+    # Ensure the profile is marked as a bot (peerType=bot) so command menus
+    # and bot UI behaviour work correctly with SimpleX Chat v7.1.x.
+    try:
+        await client.ensure_bot_profile(display_name="Home Assistant")
+    except Exception as exc:  # noqa: BLE001
+        _LOGGER.warning("Could not ensure bot profile: %s", exc)
+
     # Store runtime data
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {

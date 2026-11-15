@@ -416,10 +416,14 @@ class SimplexWsClient:
         )
 
     async def create_invite(self, timeout: float = 15.0) -> str:
-        """Create a one-time invitation link and return the link string."""
+        """Create a one-time invitation link (APIAddContact).
+
+        Official syntax (v7.1):
+          /_connect <userId>
+        """
         user_id = await self._get_user_id()
-        # Try the bot API first, then legacy CLI
-        for cmd in (f"/_create_address {user_id}", "/connect"):
+        # Prefer official APIAddContact, then legacy fallbacks
+        for cmd in (f"/_connect {user_id}", "/connect"):
             try:
                 resp = await self._rpc_cmd(cmd, timeout=timeout)
             except SimplexWsError as err:
@@ -438,35 +442,47 @@ class SimplexWsClient:
         raise SimplexWsError("Could not extract invitation link from response")
 
     async def send_text(self, chat_ref: str, text: str, timeout: float = 30.0) -> dict[str, Any]:
-        """Send a plain text message to a contact (@id) or group (#id)."""
-        user_id = await self._get_user_id()
-        msg = json.dumps({"type": "text", "text": text})
-        cmd = f"/_send {user_id} {chat_ref} {msg}"
+        """Send a plain text message (APISendMessages – official Bot API v7.1).
+
+        Official syntax:
+          /_send <chat_ref> json [{"msgContent":{"type":"text","text":"..."}}]
+
+        chat_ref must be @<contactId> or #<groupId>.
+        """
+        composed = [{"msgContent": {"type": "text", "text": text}}]
+        cmd = f"/_send {chat_ref} json {json.dumps(composed, separators=(',', ':'))}"
         try:
             return await self._rpc_cmd(cmd, timeout=timeout)
         except SimplexWsError as err:
-            # Fallback to the legacy CLI syntax (may still work on older CLIs)
-            _LOGGER.debug("send_text: /_send failed (%s), trying legacy CLI syntax", err)
+            # Fallback to the legacy CLI syntax (older images / older CLI)
+            _LOGGER.debug("send_text: modern /_send failed (%s), trying legacy CLI syntax", err)
             safe_text = text.replace('"', '\\"')
             legacy_cmd = f'{chat_ref} "{safe_text}"'
             return await self._rpc_cmd(legacy_cmd, timeout=timeout)
 
     async def send_file(
-        self, chat_ref: str, file_path: str, timeout: float = 120.0
+        self, chat_ref: str, file_path: str, text: str = "", timeout: float = 120.0
     ) -> dict[str, Any]:
-        """Send a local file (audio clip, video clip, image, …) to a contact or group.
+        """Send a local file as part of a message (APISendMessages + fileSource).
+
+        Official way in v7.1 embeds the file in ComposedMessage.
+        Falls back to classic /f if the modern form is rejected.
 
         `file_path` must be readable by the simplex-chat CLI process itself —
         if the CLI runs in a different container/host than Home Assistant,
         it must be a path inside a volume shared between the two.
         """
-        user_id = await self._get_user_id()
-        msg = json.dumps({"type": "file", "filePath": file_path})
-        cmd = f"/_send {user_id} {chat_ref} {msg}"
+        composed = [
+            {
+                "fileSource": {"filePath": file_path},
+                "msgContent": {"type": "file", "text": text or ""},
+            }
+        ]
+        cmd = f"/_send {chat_ref} json {json.dumps(composed, separators=(',', ':'))}"
         try:
             return await self._rpc_cmd(cmd, timeout=timeout)
         except SimplexWsError as err:
-            _LOGGER.debug("send_file: /_send failed (%s), trying legacy CLI syntax", err)
+            _LOGGER.debug("send_file: modern /_send failed (%s), trying classic /f", err)
             safe_path = file_path.replace('"', '\\"')
             legacy_cmd = f'/f {chat_ref} "{safe_path}"'
             return await self._rpc_cmd(legacy_cmd, timeout=timeout)
@@ -483,7 +499,7 @@ class SimplexWsClient:
         return contacts if isinstance(contacts, list) else []
 
     async def get_user_address(self, timeout: float = 10.0) -> str | None:
-        """Return the long-term user address if one exists."""
+        """Return the long-term user address if one exists (APIShowMyAddress)."""
         try:
             user_id = await self._get_user_id()
         except SimplexWsError:
@@ -503,3 +519,45 @@ class SimplexWsClient:
             if addr:
                 return str(addr)
         return None
+
+    async def ensure_bot_profile(self, display_name: str | None = None) -> None:
+        """Ensure the active profile has peerType = "bot".
+
+        Required so that clients show the bot command menu and treat the
+        profile as a bot (SimpleX Chat >= 6.4.3 / v7.1).
+        """
+        user = await self.get_active_user()
+        if not user:
+            _LOGGER.warning("ensure_bot_profile: no active user")
+            return
+
+        profile = user.get("profile") or {}
+        if profile.get("peerType") == "bot":
+            return
+
+        new_profile = {
+            "displayName": display_name or profile.get("displayName") or "Home Assistant",
+            "fullName": profile.get("fullName") or "",
+            "peerType": "bot",
+        }
+        # APIUpdateProfile
+        cmd = f"/u {json.dumps(new_profile, separators=(',', ':'))}"
+        try:
+            await self._rpc_cmd(cmd, timeout=15.0)
+            _LOGGER.info("Profile set to peerType=bot")
+            self._user_id = None  # invalidate cache
+        except SimplexWsError as err:
+            _LOGGER.warning("Failed to set peerType=bot: %s", err)
+
+    async def set_bot_commands(self, commands: str) -> None:
+        """Configure the bot command menu (official /set bot commands).
+
+        Example:
+          'Status':/status,'Help':/help,'Lights':{'On':/'light on','Off':/'light off'}
+        """
+        commands = (commands or "").strip()
+        if not commands:
+            return
+        cmd = f"/set bot commands {commands}"
+        await self._rpc_cmd(cmd, timeout=10.0)
+        _LOGGER.info("Bot commands applied")
