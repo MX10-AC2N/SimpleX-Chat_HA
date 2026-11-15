@@ -326,12 +326,10 @@ class SimplexWsClient:
 
         user_id = await self._get_user_id()
 
-        # Build the list of candidate commands (most likely first)
-        json_plan = json.dumps({"type": "invitation", "invitation": link})
+        # Official APIConnect + legacy fallback
         candidates = [
             f"/_connect {user_id} {link}",
-            f"/_connect {user_id} {json_plan}",
-            f"/connect {link}",  # legacy CLI fallback
+            f"/connect {link}",
         ]
 
         initial: dict[str, Any] | None = None
@@ -360,7 +358,18 @@ class SimplexWsClient:
             if cid is not None:
                 return {"chat_ref": f"@{cid}", "type": "contact", "initial": initial}
 
-        if initial.get("type") in ("sentConfirmation", "sentInvitation", "contactConnecting"):
+        if initial.get("type") in ("startedConnectionToContact", "sentInvitationToContact"):
+            contact = initial.get("contact") or {}
+            cid = contact.get("contactId")
+            if cid is not None:
+                return {"chat_ref": f"@{cid}", "type": "contact", "initial": initial}
+
+        if initial.get("type") in (
+            "sentConfirmation",
+            "sentInvitation",
+            "contactConnecting",
+            "invitation",
+        ):
             _LOGGER.debug(
                 "accept_invite_link: intermediate type=%s, waiting for connection",
                 initial.get("type"),
@@ -372,6 +381,8 @@ class SimplexWsClient:
             "contactSndReady",
             "userJoinedGroup",
             "groupJoined",
+            "startedConnectionToContact",
+            "contactConnecting",
         }
         deadline = self._loop.time() + timeout
         while self._loop.time() < deadline:
@@ -391,7 +402,12 @@ class SimplexWsClient:
             chat_ref: str | None = None
             chat_type = "contact"
 
-            if etype in ("contactConnected", "contactSndReady"):
+            if etype in (
+                "contactConnected",
+                "contactSndReady",
+                "startedConnectionToContact",
+                "contactConnecting",
+            ):
                 contact = resp.get("contact") or {}
                 cid = contact.get("contactId")
                 if cid is not None:
@@ -419,26 +435,69 @@ class SimplexWsClient:
         """Create a one-time invitation link (APIAddContact).
 
         Official syntax (v7.1):
-          /_connect <userId>
+          /_connect <userId>[ incognito=on]
+
+        Response type "invitation" contains:
+          connLinkInvitation: { connFullLink: "...", connShortLink: "..."? }
         """
         user_id = await self._get_user_id()
-        # Prefer official APIAddContact, then legacy fallbacks
+
+        def _extract_link(resp: dict) -> str | None:
+            """Extract a usable invitation / address link from any known response shape."""
+            # Official APIAddContact response
+            cli = resp.get("connLinkInvitation")
+            if isinstance(cli, dict):
+                link = cli.get("connFullLink") or cli.get("connShortLink")
+                if link:
+                    return str(link)
+            if isinstance(cli, str) and cli:
+                return cli
+
+            for key in ("connLink", "connReqInvitation", "invitation", "connLinkContact"):
+                val = resp.get(key)
+                if isinstance(val, str) and val:
+                    return val
+                if isinstance(val, dict):
+                    link = val.get("connFullLink") or val.get("connShortLink") or val.get("connLink")
+                    if link:
+                        return str(link)
+
+            conn = resp.get("connection") or {}
+            if isinstance(conn, dict):
+                for key in ("connLink", "connLinkInv", "connReqInvitation"):
+                    val = conn.get(key)
+                    if isinstance(val, str) and val:
+                        return val
+                    if isinstance(val, dict):
+                        link = val.get("connFullLink") or val.get("connShortLink")
+                        if link:
+                            return str(link)
+
+            ucl = resp.get("userContactLink") or resp.get("contactLink")
+            if isinstance(ucl, dict):
+                cl = ucl.get("connLinkContact") or ucl
+                if isinstance(cl, dict):
+                    link = cl.get("connFullLink") or cl.get("connShortLink")
+                    if link:
+                        return str(link)
+                if isinstance(cl, str) and cl:
+                    return cl
+            return None
+
         for cmd in (f"/_connect {user_id}", "/connect"):
             try:
                 resp = await self._rpc_cmd(cmd, timeout=timeout)
             except SimplexWsError as err:
                 _LOGGER.debug("create_invite: %s failed: %s", cmd.split(" ", 1)[0], err)
                 continue
-            link = (
-                resp.get("connLink")
-                or resp.get("invitation")
-                or (resp.get("connection") or {}).get("connLink")
-                or resp.get("connReqInvitation")
-                or (resp.get("userContactLink") or {}).get("connLink")
-            )
+            link = _extract_link(resp if isinstance(resp, dict) else {})
             if link:
-                return str(link)
-            _LOGGER.debug("create_invite response from %s: %s", cmd, resp)
+                return link
+            _LOGGER.warning(
+                "create_invite: no link in response type=%s keys=%s",
+                (resp or {}).get("type"),
+                list((resp or {}).keys()),
+            )
         raise SimplexWsError("Could not extract invitation link from response")
 
     async def send_text(self, chat_ref: str, text: str, timeout: float = 30.0) -> dict[str, Any]:
@@ -446,15 +505,12 @@ class SimplexWsClient:
 
         Official syntax:
           /_send <chat_ref> json [{"msgContent":{"type":"text","text":"..."}}]
-
-        chat_ref must be @<contactId> or #<groupId>.
         """
         composed = [{"msgContent": {"type": "text", "text": text}}]
         cmd = f"/_send {chat_ref} json {json.dumps(composed, separators=(',', ':'))}"
         try:
             return await self._rpc_cmd(cmd, timeout=timeout)
         except SimplexWsError as err:
-            # Fallback to the legacy CLI syntax (older images / older CLI)
             _LOGGER.debug("send_text: modern /_send failed (%s), trying legacy CLI syntax", err)
             safe_text = text.replace('"', '\\"')
             legacy_cmd = f'{chat_ref} "{safe_text}"'
@@ -463,15 +519,7 @@ class SimplexWsClient:
     async def send_file(
         self, chat_ref: str, file_path: str, text: str = "", timeout: float = 120.0
     ) -> dict[str, Any]:
-        """Send a local file as part of a message (APISendMessages + fileSource).
-
-        Official way in v7.1 embeds the file in ComposedMessage.
-        Falls back to classic /f if the modern form is rejected.
-
-        `file_path` must be readable by the simplex-chat CLI process itself —
-        if the CLI runs in a different container/host than Home Assistant,
-        it must be a path inside a volume shared between the two.
-        """
+        """Send a local file (APISendMessages + fileSource, with /f fallback)."""
         composed = [
             {
                 "fileSource": {"filePath": file_path},
@@ -484,8 +532,7 @@ class SimplexWsClient:
         except SimplexWsError as err:
             _LOGGER.debug("send_file: modern /_send failed (%s), trying classic /f", err)
             safe_path = file_path.replace('"', '\\"')
-            legacy_cmd = f'/f {chat_ref} "{safe_path}"'
-            return await self._rpc_cmd(legacy_cmd, timeout=timeout)
+            return await self._rpc_cmd(f'/f {chat_ref} "{safe_path}"', timeout=timeout)
 
     async def list_contacts(self, timeout: float = 15.0) -> list[dict[str, Any]]:
         """Return the list of contacts for the active user."""
@@ -499,7 +546,7 @@ class SimplexWsClient:
         return contacts if isinstance(contacts, list) else []
 
     async def get_user_address(self, timeout: float = 10.0) -> str | None:
-        """Return the long-term user address if one exists (APIShowMyAddress)."""
+        """Return the long-term user address if one exists."""
         try:
             user_id = await self._get_user_id()
         except SimplexWsError:
@@ -516,48 +563,38 @@ class SimplexWsClient:
                 or resp.get("connLinkContact")
                 or (resp.get("userContactLink") or {}).get("connLink")
             )
+            if isinstance(addr, dict):
+                addr = addr.get("connFullLink") or addr.get("connShortLink")
             if addr:
                 return str(addr)
         return None
 
     async def ensure_bot_profile(self, display_name: str | None = None) -> None:
-        """Ensure the active profile has peerType = "bot".
-
-        Required so that clients show the bot command menu and treat the
-        profile as a bot (SimpleX Chat >= 6.4.3 / v7.1).
-        """
+        """Ensure the active profile has peerType = "bot"."""
         user = await self.get_active_user()
         if not user:
             _LOGGER.warning("ensure_bot_profile: no active user")
             return
-
         profile = user.get("profile") or {}
         if profile.get("peerType") == "bot":
             return
-
         new_profile = {
             "displayName": display_name or profile.get("displayName") or "Home Assistant",
             "fullName": profile.get("fullName") or "",
             "peerType": "bot",
         }
-        # APIUpdateProfile
         cmd = f"/u {json.dumps(new_profile, separators=(',', ':'))}"
         try:
             await self._rpc_cmd(cmd, timeout=15.0)
             _LOGGER.info("Profile set to peerType=bot")
-            self._user_id = None  # invalidate cache
+            self._user_id = None
         except SimplexWsError as err:
             _LOGGER.warning("Failed to set peerType=bot: %s", err)
 
     async def set_bot_commands(self, commands: str) -> None:
-        """Configure the bot command menu (official /set bot commands).
-
-        Example:
-          'Status':/status,'Help':/help,'Lights':{'On':/'light on','Off':/'light off'}
-        """
+        """Configure the bot command menu (/set bot commands)."""
         commands = (commands or "").strip()
         if not commands:
             return
-        cmd = f"/set bot commands {commands}"
-        await self._rpc_cmd(cmd, timeout=10.0)
+        await self._rpc_cmd(f"/set bot commands {commands}", timeout=10.0)
         _LOGGER.info("Bot commands applied")
