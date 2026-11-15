@@ -1,0 +1,19 @@
+# Tableau de bord "Intercom" plein écran pour une tablette murale / de salon.
+# Nécessite la carte custom:simplex-intercom-card (voir www/simplex-intercom-card/).
+#
+# Remplace "family" et "alice" par les alias configurés dans l'intégration
+# (Paramètres → Appareils et services → SimpleX Chat → Configurer).
+
+title: Interphone SimpleX
+views:
+  - title: Salon
+    path: simplex-intercom
+    icon: mdi:chat-processing
+    type: panel
+    cards:
+      - type: custom:simplex-intercom-card
+        title: "Salon → Famille"
+        aliases:
+          - family
+          - alice
+        default_alias: family
