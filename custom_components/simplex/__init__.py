@@ -270,6 +270,31 @@ def _register_services(hass: HomeAssistant) -> None:
             link = await client.create_invite()
         except SimplexWsError as err:
             raise HomeAssistantError(str(err)) from err
+
+        # Make the link visible from dashboards (Mushroom / buttons don't show
+        # service responses). Persistent notification + event.
+        await hass.services.async_call(
+            "persistent_notification",
+            "create",
+            {
+                "title": "SimpleX – Invitation",
+                "message": (
+                    "Lien d'invitation one-time :\n\n"
+                    f"`{link}`\n\n"
+                    "Copie ce lien (ou scanne-le depuis l'app SimpleX) puis "
+                    "partage-le au contact. Il n'est utilisable qu'une seule fois."
+                ),
+                "notification_id": "simplex_invite_link",
+            },
+            blocking=False,
+        )
+        hass.bus.async_fire(
+            "simplex_invite_created",
+            {"invite_link": link, "entry_id": entry_id},
+        )
+        # Also store on the entry runtime data for sensors / scripts
+        data["last_invite_link"] = link
+
         return {"invite_link": link}
 
     async def handle_list_contacts(call: ServiceCall) -> dict[str, Any]:
