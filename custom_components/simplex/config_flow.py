@@ -17,8 +17,10 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_OUTBOX_DIR,
     CONF_TARGETS,
     CONF_WS_URL,
+    DEFAULT_OUTBOX_DIR,
     DEFAULT_WS_URL,
     DOMAIN,
     ERROR_ALIAS_EXISTS,
@@ -96,7 +98,33 @@ class OptionsFlowHandler(OptionsFlowWithReload):
     ) -> FlowResult:
         return self.async_show_menu(
             step_id="init",
-            menu_options=["add_contact", "remove_contact", "show_targets"],
+            menu_options=["add_contact", "remove_contact", "show_targets", "settings"],
+        )
+
+    async def async_step_settings(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Edit integration-wide settings (currently: the outbox directory)."""
+        if user_input is not None:
+            new_options = {
+                **self.config_entry.options,
+                CONF_OUTBOX_DIR: user_input[CONF_OUTBOX_DIR].strip() or DEFAULT_OUTBOX_DIR,
+            }
+            return self.async_create_entry(title="", data=new_options)
+
+        current_dir = self.config_entry.options.get(CONF_OUTBOX_DIR, DEFAULT_OUTBOX_DIR)
+        return self.async_show_form(
+            step_id="settings",
+            data_schema=vol.Schema(
+                {vol.Required(CONF_OUTBOX_DIR, default=current_dir): str}
+            ),
+            description_placeholders={
+                "hint": (
+                    "Dossier où la tablette dépose les clips audio/vidéo avant "
+                    "envoi. Doit correspondre au volume partagé avec le "
+                    "conteneur simplex-ws (voir DOCKER.md)."
+                )
+            },
         )
 
     async def async_step_add_contact(
@@ -153,7 +181,7 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             if to_remove in current:
                 del current[to_remove]
                 return self.async_create_entry(
-                    title="", data={CONF_TARGETS: current}
+                    title="", data={**self.config_entry.options, CONF_TARGETS: current}
                 )
 
         return self.async_show_form(
@@ -211,7 +239,7 @@ class OptionsFlowHandler(OptionsFlowWithReload):
                 "type": resp.get("type", "contact"),
             }
             return self.async_create_entry(
-                title="", data={CONF_TARGETS: current}
+                title="", data={**self.config_entry.options, CONF_TARGETS: current}
             )
         except SimplexWsTimeoutError as err:
             _LOGGER.warning("Invite timeout: %s payload=%s", err, getattr(err, "payload", None))

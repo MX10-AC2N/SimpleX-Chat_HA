@@ -407,6 +407,19 @@ class SimplexWsClient:
         cmd = f'{chat_ref} "{safe_text}"'
         return await self._rpc_cmd(cmd, timeout=timeout)
 
+    async def send_file(
+        self, chat_ref: str, file_path: str, timeout: float = 120.0
+    ) -> dict[str, Any]:
+        """Send a local file (audio clip, video clip, image, …) to a contact or group.
+
+        `file_path` must be readable by the simplex-chat CLI process itself —
+        if the CLI runs in a different container/host than Home Assistant,
+        it must be a path inside a volume shared between the two.
+        """
+        safe_path = file_path.replace('"', '\\"')
+        cmd = f'/f {chat_ref} "{safe_path}"'
+        return await self._rpc_cmd(cmd, timeout=timeout)
+
     async def list_contacts(self, timeout: float = 15.0) -> list[dict[str, Any]]:
         """Return the list of contacts for the active user."""
         resp = await self._rpc_cmd("/contacts", timeout=timeout)

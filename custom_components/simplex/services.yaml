@@ -24,6 +24,25 @@ send_message:
       selector:
         text:
 
+send_file:
+  name: Send file
+  description: Send a local file (audio clip, video clip, image…) to a configured SimpleX alias. The file must be readable by the simplex-chat CLI process (shared volume if it runs in another container).
+  fields:
+    alias:
+      name: Alias
+      description: The friendly name of the contact/group as configured in the integration.
+      required: true
+      example: "alice"
+      selector:
+        text:
+    file_path:
+      name: File path
+      description: Absolute path to the file to send, as seen by Home Assistant.
+      required: true
+      example: "/config/simplex_outbox/clip_20261114.ogg"
+      selector:
+        text:
+
 create_invite:
   name: Create invitation
   description: Generate a one-time SimpleX invitation link from the CLI.

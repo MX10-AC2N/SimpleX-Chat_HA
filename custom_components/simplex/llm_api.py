@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import voluptuous as vol
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import llm
 
 from .const import DOMAIN
 from .websocket_client import SimplexWsError
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class SimplexSendMessageTool(llm.Tool):
@@ -107,7 +111,21 @@ class SimplexAPI(llm.API):
         )
 
 
-def register_llm_api(hass: HomeAssistant, entry):
-    """Register the API and return an unregister callback."""
+def register_llm_api(hass: HomeAssistant, entry) -> None:
+    """Register the Assist/LLM API for this entry.
+
+    `homeassistant.helpers.llm.async_register_api` has no unregister
+    counterpart and raises `HomeAssistantError` if called twice with the
+    same id. Since this entry's api id (`simplex_<entry_id>`) is stable
+    across reloads and `SimplexAPI.async_get_api_instance` always reads
+    `targets` from `hass.data` at call time, re-registering on a reload is
+    unnecessary rather than wrong — we just ignore the "already
+    registered" error and keep using the existing instance.
+    """
     api = SimplexAPI(hass, entry)
-    return llm.async_register_api(hass, api)
+    try:
+        llm.async_register_api(hass, api)
+    except HomeAssistantError:
+        _LOGGER.debug(
+            "SimpleX LLM API for entry %s already registered, skipping", entry.entry_id
+        )

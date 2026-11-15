@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 import aiohttp
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import config_validation as cv
@@ -15,8 +15,10 @@ from homeassistant.helpers.typing import ConfigType
 import voluptuous as vol
 
 from .const import (
+    CONF_OUTBOX_DIR,
     CONF_TARGETS,
     CONF_WS_URL,
+    DEFAULT_OUTBOX_DIR,
     DEFAULT_WS_URL,
     DOMAIN,
     EVENT_MESSAGE_RECEIVED,
@@ -24,8 +26,10 @@ from .const import (
     SERVICE_ACCEPT_INVITE,
     SERVICE_CREATE_INVITE,
     SERVICE_LIST_CONTACTS,
+    SERVICE_SEND_FILE,
     SERVICE_SEND_MESSAGE,
 )
+from .http import SimplexUploadView
 from .llm_api import register_llm_api
 from .websocket_client import SimplexWsClient, SimplexWsError
 
@@ -33,9 +37,17 @@ _LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
+# Set once the HTTP upload view has been registered for this HA instance,
+# so a second config entry (or a reload) never tries to register it twice.
+_DATA_HTTP_VIEW_REGISTERED = "http_view_registered"
+
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up the SimpleX Chat component (services only)."""
+    """Set up the SimpleX Chat component (services + HTTP view, entry-independent)."""
+    hass.data.setdefault(DOMAIN, {})
+    if not hass.data[DOMAIN].get(_DATA_HTTP_VIEW_REGISTERED):
+        hass.http.register_view(SimplexUploadView(hass))
+        hass.data[DOMAIN][_DATA_HTTP_VIEW_REGISTERED] = True
     return True
 
 
@@ -43,13 +55,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up SimpleX Chat from a config entry."""
     ws_url: str = entry.data.get(CONF_WS_URL, DEFAULT_WS_URL)
     targets: dict[str, Any] = dict(entry.options.get(CONF_TARGETS, {}))
+    outbox_dir: str = entry.options.get(CONF_OUTBOX_DIR, DEFAULT_OUTBOX_DIR)
 
     _LOGGER.info(
-        "Setting up SimpleX entry %s (ws=%s, %d target(s))",
+        "Setting up SimpleX entry %s (ws=%s, %d target(s), outbox=%s)",
         entry.entry_id,
         ws_url,
         len(targets),
+        outbox_dir,
     )
+
+    # The outbox directory must exist so the HTTP upload view can write into
+    # it immediately; it must also be shared (bind-mounted) with the
+    # container running the simplex-chat CLI, otherwise `/f` will fail with
+    # a "file not found" chatCmdError when the CLI tries to read it.
+    try:
+        await hass.async_add_executor_job(
+            lambda: Path(outbox_dir).mkdir(parents=True, exist_ok=True)
+        )
+    except OSError as exc:
+        _LOGGER.warning("Could not create outbox directory %s: %s", outbox_dir, exc)
 
     client = SimplexWsClient(ws_url, hass.loop)
     try:
@@ -66,14 +91,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "client": client,
         "targets": targets,
         "entry": entry,
+        "outbox_dir": outbox_dir,
     }
 
     # Forward platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Register LLM tool
-    unregister_llm = register_llm_api(hass, entry)
-    entry.async_on_unload(unregister_llm)
+    # Register the LLM / Assist tool for this entry. The `llm` helper has no
+    # unregister API, so a reload (which tears down and re-runs this
+    # function with the *same* entry_id, hence the same stable api id) would
+    # otherwise raise "API already registered". We register once and treat
+    # a repeat registration as a no-op: the tool reads `targets` from
+    # hass.data dynamically on every call, so the already-registered
+    # instance stays correct across reloads.
+    register_llm_api(hass, entry)
 
     # Wire incoming message events → HA events
     def _on_ws_event(raw: dict[str, Any]) -> None:
@@ -82,7 +113,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return
         etype = resp.get("type")
         if etype in ("newChatItems", "chatItemsCreated"):
-            # Fire a HA event for each new text message
             items = resp.get("chatItems") or resp.get("chatItem") or []
             if not isinstance(items, list):
                 items = [items]
@@ -95,12 +125,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     remove_handler = client.add_event_handler(_on_ws_event)
     entry.async_on_unload(remove_handler)
 
-    # Register services (once)
+    # Register domain services (idempotent, guarded)
     if not hass.services.has_service(DOMAIN, SERVICE_SEND_MESSAGE):
         _register_services(hass)
 
-    # Options update listener
-    entry.async_on_unload(entry.add_update_listener(async_update_options))
+    # NOTE: we deliberately do NOT also register an options update listener
+    # that calls async_reload() here. The options flow already extends
+    # OptionsFlowWithReload, which reloads the entry itself. Combining both
+    # causes a double reload / race condition that Home Assistant has
+    # deprecated since 2026.6 and turns into a hard error from 2026.12.
 
     _LOGGER.info("SimpleX entry %s ready", entry.entry_id)
     return True
@@ -113,16 +146,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if data and "client" in data:
         await data["client"].close()
     return unloaded
-
-
-async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Handle options update (reload platforms so notify entities stay in sync)."""
-    # Keep runtime targets in sync
-    if entry.entry_id in hass.data.get(DOMAIN, {}):
-        hass.data[DOMAIN][entry.entry_id]["targets"] = dict(
-            entry.options.get(CONF_TARGETS, {})
-        )
-    await hass.config_entries.async_reload(entry.entry_id)
 
 
 # ------------------------------------------------------------------
@@ -156,7 +179,6 @@ def _fire_message_event(
     group = chat_info.get("groupInfo") or {}
     chat_ref = None
     alias = None
-    direction = "incoming"
 
     if contact:
         cid = contact.get("contactId")
@@ -174,7 +196,12 @@ def _fire_message_event(
                 break
 
     meta = item.get("meta") or {}
-    direction = "outgoing" if meta.get("direction", {}).get("type") == "directSnd" else "incoming"
+    direction_meta = meta.get("direction")
+    direction = (
+        "outgoing"
+        if isinstance(direction_meta, dict) and direction_meta.get("type") == "directSnd"
+        else "incoming"
+    )
 
     hass.bus.async_fire(
         EVENT_MESSAGE_RECEIVED,
@@ -202,23 +229,31 @@ def _register_services(hass: HomeAssistant) -> None:
         alias = call.data["alias"]
         message = call.data["message"]
         title = call.data.get("title")
+        data = _get_entry_data_for_alias(hass, alias)
+        client: SimplexWsClient = data["client"]
+        chat_ref = data["targets"][alias].get("chat_ref")
+        if not chat_ref:
+            raise HomeAssistantError(f"Alias '{alias}' has no chat_ref")
+        full = f"{title}: {message}" if title else message
+        try:
+            await client.send_text(chat_ref, full)
+        except SimplexWsError as err:
+            raise HomeAssistantError(str(err)) from err
 
-        # Find an entry that has this alias
-        for entry_id, data in hass.data.get(DOMAIN, {}).items():
-            targets = data.get("targets", {})
-            if alias not in targets:
-                continue
-            client: SimplexWsClient = data["client"]
-            chat_ref = targets[alias].get("chat_ref")
-            if not chat_ref:
-                raise HomeAssistantError(f"Alias '{alias}' has no chat_ref")
-            full = f"{title}: {message}" if title else message
-            try:
-                await client.send_text(chat_ref, full)
-            except SimplexWsError as err:
-                raise HomeAssistantError(str(err)) from err
-            return
-        raise HomeAssistantError(f"Unknown SimpleX alias: {alias}")
+    async def handle_send_file(call: ServiceCall) -> None:
+        alias = call.data["alias"]
+        file_path = call.data["file_path"]
+        data = _get_entry_data_for_alias(hass, alias)
+        client: SimplexWsClient = data["client"]
+        chat_ref = data["targets"][alias].get("chat_ref")
+        if not chat_ref:
+            raise HomeAssistantError(f"Alias '{alias}' has no chat_ref")
+        if not await hass.async_add_executor_job(Path(file_path).is_file):
+            raise HomeAssistantError(f"File not found: {file_path}")
+        try:
+            await client.send_file(chat_ref, file_path)
+        except SimplexWsError as err:
+            raise HomeAssistantError(str(err)) from err
 
     async def handle_create_invite(call: ServiceCall) -> dict[str, Any]:
         entry_id = call.data.get("entry_id")
@@ -257,7 +292,6 @@ def _register_services(hass: HomeAssistant) -> None:
         if not chat_ref:
             raise HomeAssistantError("Invite accepted but no chat reference returned")
 
-        # Optionally persist as a new target
         if alias:
             targets = dict(entry.options.get(CONF_TARGETS, {}))
             if alias in targets:
@@ -268,7 +302,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 "type": result.get("type", "contact"),
             }
             hass.config_entries.async_update_entry(
-                entry, options={CONF_TARGETS: targets}
+                entry, options={**entry.options, CONF_TARGETS: targets}
             )
 
         return {"chat_ref": chat_ref, "type": result.get("type"), "alias": alias}
@@ -282,6 +316,18 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Required("alias"): cv.string,
                 vol.Required("message"): cv.string,
                 vol.Optional("title"): cv.string,
+            }
+        ),
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SEND_FILE,
+        handle_send_file,
+        schema=vol.Schema(
+            {
+                vol.Required("alias"): cv.string,
+                vol.Required("file_path"): cv.string,
             }
         ),
     )
@@ -318,7 +364,7 @@ def _register_services(hass: HomeAssistant) -> None:
 
 
 def _get_entry_data(hass: HomeAssistant, entry_id: str | None) -> dict[str, Any]:
-    domain_data = hass.data.get(DOMAIN, {})
+    domain_data = {k: v for k, v in hass.data.get(DOMAIN, {}).items() if isinstance(v, dict) and "client" in v}
     if entry_id and entry_id in domain_data:
         return domain_data[entry_id]
     if len(domain_data) == 1:
@@ -326,3 +372,13 @@ def _get_entry_data(hass: HomeAssistant, entry_id: str | None) -> dict[str, Any]
     raise HomeAssistantError(
         "Multiple SimpleX entries exist; please specify entry_id"
     )
+
+
+def _get_entry_data_for_alias(hass: HomeAssistant, alias: str) -> dict[str, Any]:
+    """Find the entry that owns the given alias (searches across all entries)."""
+    for entry_id, data in hass.data.get(DOMAIN, {}).items():
+        if not isinstance(data, dict) or "client" not in data:
+            continue
+        if alias in data.get("targets", {}):
+            return data
+    raise HomeAssistantError(f"Unknown SimpleX alias: {alias}")
