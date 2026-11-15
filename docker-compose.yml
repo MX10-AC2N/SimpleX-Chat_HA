@@ -1,0 +1,103 @@
+########################################################################
+# SimpleX Chat + Home Assistant — docker-compose complet et corrigé
+#
+# Corrige le bug du DOCKER.md original : l'image libre7/simplex-bridge
+# fait écouter son démon WebSocket UNIQUEMENT sur 127.0.0.1 *dans son
+# propre conteneur*. Sur un bridge network Docker classique, HA ne peut
+# donc jamais la joindre via "ws://simplex-ws:5225", même sur le même
+# réseau — ce n'est pas un problème de nom DNS, c'est un problème de
+# binding.
+#
+# Deux solutions valables, les deux sont données ci-dessous :
+#
+#   A) network_mode: host pour les deux services → le plus simple,
+#      recommandé si ta machine n'héberge qu'un seul HA.
+#
+#   B) un sidecar "socat" qui partage le netns de simplex-ws et republie
+#      le port sur 0.0.0.0 à l'intérieur du réseau Docker partagé →
+#      utile si tu ne peux pas / ne veux pas utiliser host networking
+#      (plusieurs instances HA sur la même machine, Docker rootless…).
+#
+# Choisis UNE des deux sections "simplex-ws" + réseau ci-dessous, pas les
+# deux à la fois.
+########################################################################
+
+services:
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: homeassistant
+    volumes:
+      - ./config:/config
+      - /etc/localtime:/etc/localtime:ro
+      # Dossier de dépôt des clips audio/vidéo enregistrés depuis la
+      # tablette — DOIT être le même volume nommé que celui monté dans
+      # simplex-ws ci-dessous, au même chemin absolu des deux côtés.
+      - simplex_outbox:/config/simplex_outbox
+    restart: unless-stopped
+    networks:
+      - home
+    # ports / privileged / devices comme tu les as déjà…
+
+  # ----------------------------------------------------------------
+  # OPTION A — host networking (recommandé par défaut)
+  # ----------------------------------------------------------------
+  # simplex-ws:
+  #   image: libre7/simplex-bridge:latest
+  #   container_name: simplex-ws
+  #   network_mode: host
+  #   restart: unless-stopped
+  #   volumes:
+  #     - simplex_data:/data
+  #     - simplex_outbox:/config/simplex_outbox
+  #   environment:
+  #     - TZ=Europe/Paris
+  #
+  # Avec cette option, dans l'intégration HA utilise :
+  #   ws://127.0.0.1:5225
+  # (HA tourne alors, lui aussi, idéalement en network_mode: host, sinon
+  # utilise l'IP LAN de la machine hôte.)
+
+  # ----------------------------------------------------------------
+  # OPTION B — bridge network + sidecar socat (si host networking
+  # n'est pas possible chez toi)
+  # ----------------------------------------------------------------
+  simplex-ws:
+    image: libre7/simplex-bridge:latest
+    container_name: simplex-ws
+    restart: unless-stopped
+    volumes:
+      - simplex_data:/data
+      - simplex_outbox:/config/simplex_outbox
+    environment:
+      - TZ=Europe/Paris
+    networks:
+      - home
+    # Le démon n'écoute que sur 127.0.0.1:5225 DANS ce conteneur.
+    # On ne publie donc rien ici ; c'est le sidecar ci-dessous qui
+    # republie le port sur le réseau partagé.
+
+  simplex-ws-proxy:
+    image: alpine/socat:latest
+    container_name: simplex-ws-proxy
+    restart: unless-stopped
+    # Partage le netns de simplex-ws : "127.0.0.1" ici = "127.0.0.1" là-bas.
+    network_mode: "service:simplex-ws"
+    depends_on:
+      - simplex-ws
+    command: >
+      tcp-listen:5225,fork,reuseaddr
+      tcp-connect:127.0.0.1:5225
+    # Ce conteneur n'a pas besoin d'être sur "networks: [home]" lui-même :
+    # il hérite entièrement du netns de simplex-ws (donc aussi de son
+    # appartenance au réseau "home"). Le port 5225 est maintenant
+    # joignable depuis homeassistant via "ws://simplex-ws:5225".
+
+  # Avec l'option B, dans l'intégration HA utilise :
+  #   ws://simplex-ws:5225
+
+networks:
+  home:
+
+volumes:
+  simplex_data:
+  simplex_outbox:

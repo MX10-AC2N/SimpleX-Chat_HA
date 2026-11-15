@@ -17,6 +17,10 @@ The integration is a **client only**. It does **not** embed the `simplex-chat` b
 
 ---
 
+> ⚠️ **Correctif important (v2)** : `libre7/simplex-bridge` fait écouter son démon **uniquement sur `127.0.0.1` à l'intérieur de son propre conteneur**. Sur un bridge network Docker classique, `ws://simplex-ws:5225` n'est donc **pas joignable** depuis le conteneur `homeassistant`, même sur le même réseau — ce n'est pas un problème de DNS. Le fichier [`docker-compose.yml`](docker-compose.yml) à la racine du dépôt documente les deux correctifs possibles (host networking, ou un sidecar `socat` qui republie le port). Utilise ce fichier plutôt que les extraits isolés ci-dessous si tu démarres de zéro.
+
+> ⚠️ **Correctif important (v2)** : `libre7/simplex-bridge` fait écouter son démon **uniquement sur `127.0.0.1` à l'intérieur de son propre conteneur**. Sur un bridge network Docker classique, `ws://simplex-ws:5225` n'est donc **pas joignable** depuis le conteneur `homeassistant`, même sur le même réseau — ce n'est pas un problème de DNS. Le fichier [`docker-compose.yml`](docker-compose.yml) à la racine du dépôt documente les deux correctifs possibles (host networking, ou un sidecar `socat` qui republie le port). Utilise ce fichier plutôt que les extraits isolés ci-dessous si tu démarres de zéro.
+
 ## Option A – Same Docker Compose stack (recommended)
 
 Add a `simplex-ws` service next to your existing `homeassistant` service and put both on the **same Docker network**.
@@ -186,6 +190,27 @@ logger:
 ```
 
 ---
+
+## Volume partagé pour les clips audio/vidéo (tablette → SimpleX)
+
+Si tu utilises la carte Lovelace `simplex-intercom-card` sur une tablette, les
+clips enregistrés sont écrits par Home Assistant dans un dossier **"outbox"**
+puis le CLI `simplex-chat` doit pouvoir lire ce même fichier pour l'envoyer
+(`/f @contact <chemin>`). Comme HA et `simplex-ws` tournent dans deux
+conteneurs différents, ce dossier doit être un **volume Docker partagé**,
+monté **au même chemin absolu dans les deux conteneurs** (voir
+[`docker-compose.yml`](docker-compose.yml)) :
+
+```yaml
+volumes:
+  - simplex_outbox:/config/simplex_outbox   # côté homeassistant
+  - simplex_outbox:/config/simplex_outbox   # côté simplex-ws, même chemin
+```
+
+Dans l'intégration : **Configurer → Paramètres** → vérifie que le
+*dossier de dépôt* correspond bien à `/config/simplex_outbox` (valeur par
+défaut). Si tu changes ce chemin, change-le identiquement des deux côtés
+du compose.
 
 ## Security notes
 
