@@ -1,0 +1,38 @@
+# Écran d'accueil façon appli SimpleX Android : liste des conversations,
+# puis un onglet "fil de discussion" par contact. Nécessite v2.2+ :
+#   - custom:simplex-conversations-card (www/simplex-conversations-card/)
+#   - custom:simplex-chat-card          (www/simplex-chat-card/)
+#
+# Remplace les alias par ceux configurés dans l'intégration. Le préfixe de
+# navigation doit correspondre aux "path:" des vues ci-dessous.
+
+title: SimpleX
+views:
+  - title: Conversations
+    path: simplex-home
+    icon: mdi:chat
+    type: panel
+    cards:
+      - type: custom:simplex-conversations-card
+        title: SimpleX
+        navigate_prefix: /simplex/simplex-
+
+  - title: Famille
+    path: simplex-family
+    icon: mdi:account-group
+    type: panel
+    cards:
+      - type: custom:simplex-chat-card
+        alias: family
+        title: Famille
+        history_limit: 50
+
+  - title: Alice
+    path: simplex-alice
+    icon: mdi:account
+    type: panel
+    cards:
+      - type: custom:simplex-chat-card
+        alias: alice
+        title: Alice
+        history_limit: 50
