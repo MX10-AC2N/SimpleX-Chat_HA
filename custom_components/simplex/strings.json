@@ -24,14 +24,16 @@
           "add_contact": "Add a contact / group (paste invite link)",
           "remove_contact": "Remove a contact",
           "show_targets": "Show configured contacts",
-          "settings": "Settings (outbox directory)"
+          "settings": "Settings (outbox/inbox directories, files)"
         }
       },
       "settings": {
         "title": "SimpleX Chat – Settings",
         "description": "{hint}",
         "data": {
-          "outbox_dir": "Outbox directory"
+          "outbox_dir": "Outbox directory",
+          "inbox_dir": "Inbox directory (received files, read-only)",
+          "auto_accept_files": "Auto-accept incoming files"
         }
       },
       "add_contact": {

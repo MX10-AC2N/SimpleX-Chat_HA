@@ -10,6 +10,7 @@ SimplexWsClient to send it.
 from __future__ import annotations
 
 import logging
+import mimetypes
 import secrets
 import time
 from pathlib import Path
@@ -21,11 +22,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
 from .const import (
+    DEFAULT_INBOX_DIR,
     DEFAULT_OUTBOX_DIR,
     DOMAIN,
     ERROR_FILE_TOO_LARGE,
     ERROR_UNKNOWN_ALIAS,
     MAX_UPLOAD_BYTES,
+    MEDIA_URL_PATH,
     UPLOAD_EXTENSIONS,
     UPLOAD_URL_PATH,
 )
@@ -127,6 +130,61 @@ class SimplexUploadView(HomeAssistantView):
             return web.json_response({"success": False, "error": str(exc)}, status=502)
 
         return web.json_response({"success": True, "file": filename})
+
+
+class SimplexMediaView(HomeAssistantView):
+    """Serve files SimpleX has received, read-only, so bubbles can play them.
+
+    GET /api/simplex/media/<filename>?entry_id=... (entry_id optional with a
+    single configured entry). `<filename>` must be a bare name with no path
+    separators — it is matched against the configured inbox directory only,
+    never resolved as an arbitrary path, to prevent directory traversal.
+    """
+
+    url = f"{MEDIA_URL_PATH}/{{filename}}"
+    name = "api:simplex:media"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+
+    async def get(self, request: web.Request, filename: str) -> web.Response:
+        hass = self.hass
+        entry_id = request.query.get("entry_id")
+
+        if "/" in filename or "\\" in filename or filename in (".", ".."):
+            return web.Response(status=400, text="invalid filename")
+
+        domain_data = {
+            k: v for k, v in hass.data.get(DOMAIN, {}).items() if isinstance(v, dict) and "client" in v
+        }
+        entries = (
+            [domain_data[entry_id]] if entry_id and entry_id in domain_data else list(domain_data.values())
+        )
+        if not entries:
+            return web.Response(status=404, text="unknown entry_id")
+
+        for data in entries:
+            inbox_dir = Path(data.get("inbox_dir", DEFAULT_INBOX_DIR))
+            path = inbox_dir / filename
+            try:
+                resolved = await hass.async_add_executor_job(path.resolve)
+                inbox_resolved = await hass.async_add_executor_job(inbox_dir.resolve)
+            except OSError:
+                continue
+            # Must stay inside the configured inbox dir after resolving
+            # symlinks/".." components, even though the raw name is already
+            # separator-free above.
+            if inbox_resolved not in resolved.parents and resolved != inbox_resolved:
+                continue
+            is_file = await hass.async_add_executor_job(resolved.is_file)
+            if not is_file:
+                continue
+            content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+            data_bytes = await hass.async_add_executor_job(resolved.read_bytes)
+            return web.Response(body=data_bytes, content_type=content_type)
+
+        return web.Response(status=404, text="file not found")
 
 
 def _find_entry_for_alias(

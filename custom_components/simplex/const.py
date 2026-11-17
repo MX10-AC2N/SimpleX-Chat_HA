@@ -7,8 +7,16 @@ DOMAIN = "simplex"
 CONF_WS_URL = "ws_url"
 CONF_TARGETS = "targets"  # dict: alias -> {"chat_ref": "@id|#id", "name": "...", "type": "contact|group"}
 CONF_OUTBOX_DIR = "outbox_dir"  # dossier partagé avec le conteneur simplex-ws (clips audio/vidéo)
+CONF_INBOX_DIR = "inbox_dir"  # dossier (lecture seule) où le CLI dépose les fichiers REÇUS
+CONF_AUTO_ACCEPT_FILES = "auto_accept_files"
 DEFAULT_WS_URL = "ws://127.0.0.1:5225"
 DEFAULT_OUTBOX_DIR = "/config/simplex_outbox"
+# Doit correspondre au sous-dossier où ton fork simplex-bridge écrit les
+# fichiers reçus (flag CLI --files-folder) — voir DOCKER.md. On ne peut pas
+# déduire ce chemin automatiquement : il dépend de la version/configuration
+# du CLI dans le bridge.
+DEFAULT_INBOX_DIR = "/config/simplex_inbox/received_files"
+DEFAULT_AUTO_ACCEPT_FILES = True
 
 # Taille max d'un clip envoyé depuis la tablette (octets) — garde-fou upload
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 Mo
@@ -36,8 +44,11 @@ SERVICE_ACCEPT_INVITE = "accept_invite"
 SERVICE_CREATE_INVITE = "create_invite"
 SERVICE_LIST_CONTACTS = "list_contacts"
 
-# HTTP upload view (tablette → HA)
+# HTTP upload view (tablette → HA) and read-only media view (fichiers reçus)
 UPLOAD_URL_PATH = "/api/simplex/upload"
+MEDIA_URL_PATH = "/api/simplex/media"
+
+EVENT_FILE_RECEIVED = f"{DOMAIN}_file_received"
 
 # Errors
 ERROR_CANNOT_CONNECT = "cannot_connect"

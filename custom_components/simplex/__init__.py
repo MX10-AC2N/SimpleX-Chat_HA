@@ -15,13 +15,18 @@ from homeassistant.helpers.typing import ConfigType
 import voluptuous as vol
 
 from .const import (
+    CONF_AUTO_ACCEPT_FILES,
+    CONF_INBOX_DIR,
     CONF_OUTBOX_DIR,
     CONF_TARGETS,
     CONF_WS_URL,
+    DEFAULT_AUTO_ACCEPT_FILES,
+    DEFAULT_INBOX_DIR,
     DEFAULT_OUTBOX_DIR,
     DEFAULT_WS_URL,
     DOMAIN,
     EVENT_MESSAGE_RECEIVED,
+    MEDIA_URL_PATH,
     PLATFORMS,
     SERVICE_ACCEPT_INVITE,
     SERVICE_CREATE_INVITE,
@@ -29,17 +34,20 @@ from .const import (
     SERVICE_SEND_FILE,
     SERVICE_SEND_MESSAGE,
 )
-from .http import SimplexUploadView
+from .http import SimplexMediaView, SimplexUploadView
 from .llm_api import register_llm_api
 from .websocket_client import SimplexWsClient, SimplexWsError
+from . import ws_api
 
 _LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
-# Set once the HTTP upload view has been registered for this HA instance,
-# so a second config entry (or a reload) never tries to register it twice.
+# Set once the HTTP upload view / websocket_api commands have been
+# registered for this HA instance, so a second config entry (or a reload)
+# never tries to register either twice.
 _DATA_HTTP_VIEW_REGISTERED = "http_view_registered"
+_DATA_WS_API_REGISTERED = "ws_api_registered"
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -47,7 +55,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     hass.data.setdefault(DOMAIN, {})
     if not hass.data[DOMAIN].get(_DATA_HTTP_VIEW_REGISTERED):
         hass.http.register_view(SimplexUploadView(hass))
+        hass.http.register_view(SimplexMediaView(hass))
         hass.data[DOMAIN][_DATA_HTTP_VIEW_REGISTERED] = True
+    if not hass.data[DOMAIN].get(_DATA_WS_API_REGISTERED):
+        ws_api.async_register(hass)
+        hass.data[DOMAIN][_DATA_WS_API_REGISTERED] = True
     return True
 
 
@@ -56,13 +68,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     ws_url: str = entry.data.get(CONF_WS_URL, DEFAULT_WS_URL)
     targets: dict[str, Any] = dict(entry.options.get(CONF_TARGETS, {}))
     outbox_dir: str = entry.options.get(CONF_OUTBOX_DIR, DEFAULT_OUTBOX_DIR)
+    inbox_dir: str = entry.options.get(CONF_INBOX_DIR, DEFAULT_INBOX_DIR)
+    auto_accept_files: bool = entry.options.get(CONF_AUTO_ACCEPT_FILES, DEFAULT_AUTO_ACCEPT_FILES)
 
     _LOGGER.info(
-        "Setting up SimpleX entry %s (ws=%s, %d target(s), outbox=%s)",
+        "Setting up SimpleX entry %s (ws=%s, %d target(s), outbox=%s, inbox=%s)",
         entry.entry_id,
         ws_url,
         len(targets),
         outbox_dir,
+        inbox_dir,
     )
 
     # The outbox directory must exist so the HTTP upload view can write into
@@ -99,6 +114,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "targets": targets,
         "entry": entry,
         "outbox_dir": outbox_dir,
+        "inbox_dir": inbox_dir,
     }
 
     # Forward platforms
@@ -125,9 +141,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 items = [items]
             for item in items:
                 try:
-                    _fire_message_event(hass, entry.entry_id, item, targets)
+                    _fire_message_event(hass, entry.entry_id, item, targets, inbox_dir)
                 except Exception:  # noqa: BLE001
                     _LOGGER.exception("Failed to process incoming chat item")
+                if auto_accept_files:
+                    file_id = _pending_incoming_file_id(item)
+                    if file_id is not None:
+                        hass.async_create_task(_accept_file(client, file_id))
 
     remove_handler = client.add_event_handler(_on_ws_event)
     entry.async_on_unload(remove_handler)
@@ -160,27 +180,91 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 # ------------------------------------------------------------------
 
 
-def _fire_message_event(
-    hass: HomeAssistant,
-    entry_id: str,
-    item: dict[str, Any],
-    targets: dict[str, Any],
-) -> None:
-    """Translate a SimpleX chat item into a Home Assistant event."""
+def _pending_incoming_file_id(item: dict[str, Any]) -> int | None:
+    """Return the fileId of an incoming file that hasn't been accepted yet.
+
+    Best-effort: the exact `fileStatus.type` strings for "not yet accepted"
+    are not confirmed against every CLI version (see websocket_client.
+    receive_file docstring), so we accept on any status that isn't already
+    one of the clearly-terminal ones. Worst case this calls receive_file on
+    an already-accepted file, which the CLI just no-ops / errors on
+    harmlessly (logged at debug level, not raised to the user).
+    """
     content = item.get("content") or {}
-    msg_type = content.get("type") or content.get("msgContent", {}).get("type")
-    if msg_type not in ("text", "sndMsgContent", "rcvMsgContent"):
-        return
+    file_status = item.get("file") or content.get("file")
+    if not isinstance(file_status, dict):
+        return None
+    status_type = (file_status.get("fileStatus") or {}).get("type") if isinstance(
+        file_status.get("fileStatus"), dict
+    ) else file_status.get("fileStatus")
+    if status_type in ("rcvComplete", "rcvCancelled", "sndComplete", "invalid"):
+        return None
+    return file_status.get("fileId")
 
-    text = (
-        content.get("text")
-        or content.get("msgContent", {}).get("text")
-        or ""
-    )
-    if not text:
-        return
 
-    # Try to resolve a friendly alias
+async def _accept_file(client: SimplexWsClient, file_id: int) -> None:
+    try:
+        await client.receive_file(file_id)
+    except SimplexWsError as err:
+        _LOGGER.debug("Auto-accept of incoming file %s failed/skipped: %s", file_id, err)
+
+
+def _resolve_media_url(file_info: dict[str, Any] | None, inbox_dir: str) -> str | None:
+    """Return a /api/simplex/media/<name> URL if the file is already on disk.
+
+    Returns None (no playable media yet) until the shared inbox volume
+    actually contains it — e.g. right after `receive_file()` was requested
+    but before the transfer completed.
+    """
+    if not file_info or not file_info.get("name"):
+        return None
+    path = Path(inbox_dir) / file_info["name"]
+    if not path.is_file():
+        return None
+    from urllib.parse import quote
+
+    return f"{MEDIA_URL_PATH}/{quote(file_info['name'])}"
+
+
+def normalize_chat_item(
+    item: dict[str, Any], targets: dict[str, Any], inbox_dir: str | None = None
+) -> dict[str, Any] | None:
+    """Turn one raw SimpleX chat item into a flat dict the frontend card understands.
+
+    Shared by the live event handler (`_fire_message_event`, below) and the
+    `simplex/history` websocket command (`ws_api.py`), so the "same message"
+    always looks the same whether it arrived live or was fetched from
+    `/chats` — the chat-card bubbles don't have to special-case either path.
+
+    Returns None for item kinds we don't render as a bubble (reactions,
+    deletions, system markers, …).
+    """
+    content = item.get("content") or {}
+    msg_content = content.get("msgContent") or {}
+    msg_type = content.get("type") or msg_content.get("type")
+    if msg_type not in ("text", "sndMsgContent", "rcvMsgContent", "file", "image", "voice"):
+        return None
+
+    text = content.get("text") or msg_content.get("text") or ""
+
+    # File / voice / image attachments: surface what we can even without
+    # being able to stream the bytes (see DOCKER.md "received files" note).
+    file_info = None
+    file_status = item.get("file") or content.get("file")
+    if isinstance(file_status, dict) or msg_type in ("file", "image", "voice"):
+        file_status = file_status if isinstance(file_status, dict) else {}
+        file_info = {
+            "file_id": file_status.get("fileId"),
+            "name": file_status.get("fileName") or msg_content.get("fileName"),
+            "size": file_status.get("fileSize"),
+            "kind": "image" if msg_type == "image" else "voice" if msg_type == "voice" else "file",
+        }
+        if inbox_dir:
+            file_info["media_url"] = _resolve_media_url(file_info, inbox_dir)
+
+    if not text and not file_info:
+        return None
+
     chat_info = item.get("chatInfo") or {}
     contact = chat_info.get("contact") or {}
     group = chat_info.get("groupInfo") or {}
@@ -210,15 +294,49 @@ def _fire_message_event(
         else "incoming"
     )
 
+    # Best-effort read/delivered status for outgoing bubbles (✓ / ✓✓ in the
+    # card). The exact `itemStatus.type` strings (sndNew/sndSent/sndRcvd/
+    # sndRead…) are not confirmed against every CLI version, so unknown
+    # shapes just fall back to "sent" rather than guessing wrong.
+    status = "sent"
+    if direction == "outgoing":
+        item_status = meta.get("itemStatus") or {}
+        status_type = item_status.get("type") if isinstance(item_status, dict) else item_status
+        if status_type in ("sndRead",):
+            status = "read"
+        elif status_type in ("sndRcvd",):
+            status = "delivered"
+
+    return {
+        "alias": alias,
+        "chat_ref": chat_ref,
+        "text": text,
+        "file": file_info,
+        "direction": direction,
+        "status": status,
+        "item_id": meta.get("itemId"),
+        "timestamp": meta.get("itemTs") or meta.get("createdAt"),
+        "edited": bool(meta.get("itemEdited")),
+    }
+
+
+def _fire_message_event(
+    hass: HomeAssistant,
+    entry_id: str,
+    item: dict[str, Any],
+    targets: dict[str, Any],
+    inbox_dir: str | None = None,
+) -> None:
+    """Translate a SimpleX chat item into a Home Assistant event."""
+    normalized = normalize_chat_item(item, targets, inbox_dir)
+    if normalized is None:
+        return
+
     hass.bus.async_fire(
         EVENT_MESSAGE_RECEIVED,
         {
             "entry_id": entry_id,
-            "alias": alias,
-            "chat_ref": chat_ref,
-            "text": text,
-            "direction": direction,
-            "item_id": meta.get("itemId"),
+            **normalized,
             "raw": item,
         },
     )

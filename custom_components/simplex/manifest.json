@@ -8,6 +8,7 @@
     "@MX10-AC2N"
   ],
   "config_flow": true,
+  "dependencies": ["http", "websocket_api"],
   "documentation": "https://github.com/MX10-AC2N/SimpleX-Chat_HA",
   "integration_type": "hub",
   "iot_class": "local_push",
@@ -16,5 +17,5 @@
     "custom_components.simplex"
   ],
   "requirements": [],
-  "version": "1.1.2"
+  "version": "2.2.0"
 }

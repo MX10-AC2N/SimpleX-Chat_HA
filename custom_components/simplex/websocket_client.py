@@ -506,7 +506,12 @@ class SimplexWsClient:
         Official syntax:
           /_send <chat_ref> json [{"msgContent":{"type":"text","text":"..."}}]
         """
-        composed = [{"msgContent": {"type": "text", "text": text}}]
+        # `mentions: {}` is part of the officially documented ComposedMessage
+        # shape (see simplex-chat-client/typescript/src/client.ts,
+        # apiSendTextMessage) — included for parity even though the Haskell
+        # field may be optional, since an extra documented field is lower
+        # risk than a missing one on CLI versions where it isn't.
+        composed = [{"msgContent": {"type": "text", "text": text}, "mentions": {}}]
         cmd = f"/_send {chat_ref} json {json.dumps(composed, separators=(',', ':'))}"
         try:
             return await self._rpc_cmd(cmd, timeout=timeout)
@@ -524,6 +529,7 @@ class SimplexWsClient:
             {
                 "fileSource": {"filePath": file_path},
                 "msgContent": {"type": "file", "text": text or ""},
+                "mentions": {},
             }
         ]
         cmd = f"/_send {chat_ref} json {json.dumps(composed, separators=(',', ':'))}"
@@ -544,6 +550,65 @@ class SimplexWsClient:
             resp = await self._rpc_cmd("/contacts", timeout=timeout)
         contacts = resp.get("contacts") or []
         return contacts if isinstance(contacts, list) else []
+
+    async def get_chats(self, timeout: float = 20.0) -> list[dict[str, Any]]:
+        """Return chat previews (one per contact/group) with their recent items.
+
+        Uses the plain `/chats` command, confirmed against the upstream
+        `simplex-chat` Rust bindings (`ChatResponse::Chats { chats, .. }`).
+        There is a newer, paginated `APIGetChats` (`/_get chats <userId>
+        <pagination> <query>`) in the Bot API, but its exact pagination/query
+        JSON shape is not stably documented across CLI versions, so we
+        deliberately stick to `/chats`: it returns every chat already
+        populated with its most recent items (commonly up to ~100), which is
+        enough to render an initial thread view. There is currently no
+        supported way to page further back than that from here.
+        """
+        resp = await self._rpc_cmd("/chats", timeout=timeout)
+        chats = resp.get("chats") or []
+        return chats if isinstance(chats, list) else []
+
+    async def get_chat_history(
+        self, chat_ref: str, limit: int = 50, timeout: float = 20.0
+    ) -> list[dict[str, Any]]:
+        """Return up to `limit` recent chat items for a single contact/group.
+
+        See `get_chats()` for why this is a client-side filter over `/chats`
+        rather than a dedicated single-chat history command.
+        """
+        for chat in await self.get_chats(timeout=timeout):
+            info = chat.get("chatInfo") or {}
+            contact = info.get("contact") or {}
+            group = info.get("groupInfo") or {}
+            ref = None
+            if contact.get("contactId") is not None:
+                ref = f"@{contact['contactId']}"
+            elif group.get("groupId") is not None:
+                ref = f"#{group['groupId']}"
+            if ref == chat_ref:
+                items = chat.get("chatItems") or []
+                return items[-limit:] if isinstance(items, list) else []
+        return []
+
+    async def receive_file(self, file_id: int, timeout: float = 60.0) -> dict[str, Any]:
+        """Accept an incoming file transfer (APIReceiveFile / legacy `/fr`).
+
+        Official shape per the TS client reference (apiReceiveFile):
+          ReceiveFile { fileId, userApprovedRelays: true } → `/_receive`.
+        The exact textual command encoding of that record for `/_receive`
+        isn't independently confirmed against every CLI version the way
+        `/_send`/`/_connect` were (verified against this project's actual
+        bridge), so this is still a best-guess modern form, with the
+        long-standing classic CLI command `/fr <fileId>` as fallback — that
+        one has been stable across CLI releases.
+        """
+        try:
+            return await self._rpc_cmd(
+                f"/_receive {file_id} userApprovedRelays=on", timeout=timeout
+            )
+        except SimplexWsError as err:
+            _LOGGER.debug("receive_file: modern /_receive failed (%s), trying classic /fr", err)
+            return await self._rpc_cmd(f"/fr {file_id}", timeout=timeout)
 
     async def get_user_address(self, timeout: float = 10.0) -> str | None:
         """Return the long-term user address if one exists."""

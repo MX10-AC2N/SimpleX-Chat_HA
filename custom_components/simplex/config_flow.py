@@ -17,9 +17,13 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_AUTO_ACCEPT_FILES,
+    CONF_INBOX_DIR,
     CONF_OUTBOX_DIR,
     CONF_TARGETS,
     CONF_WS_URL,
+    DEFAULT_AUTO_ACCEPT_FILES,
+    DEFAULT_INBOX_DIR,
     DEFAULT_OUTBOX_DIR,
     DEFAULT_WS_URL,
     DOMAIN,
@@ -104,25 +108,38 @@ class OptionsFlowHandler(OptionsFlowWithReload):
     async def async_step_settings(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Edit integration-wide settings (currently: the outbox directory)."""
+        """Edit integration-wide settings (outbox/inbox directories, file auto-accept)."""
         if user_input is not None:
             new_options = {
                 **self.config_entry.options,
                 CONF_OUTBOX_DIR: user_input[CONF_OUTBOX_DIR].strip() or DEFAULT_OUTBOX_DIR,
+                CONF_INBOX_DIR: user_input[CONF_INBOX_DIR].strip() or DEFAULT_INBOX_DIR,
+                CONF_AUTO_ACCEPT_FILES: user_input[CONF_AUTO_ACCEPT_FILES],
             }
             return self.async_create_entry(title="", data=new_options)
 
-        current_dir = self.config_entry.options.get(CONF_OUTBOX_DIR, DEFAULT_OUTBOX_DIR)
+        current_outbox = self.config_entry.options.get(CONF_OUTBOX_DIR, DEFAULT_OUTBOX_DIR)
+        current_inbox = self.config_entry.options.get(CONF_INBOX_DIR, DEFAULT_INBOX_DIR)
+        current_auto_accept = self.config_entry.options.get(
+            CONF_AUTO_ACCEPT_FILES, DEFAULT_AUTO_ACCEPT_FILES
+        )
         return self.async_show_form(
             step_id="settings",
             data_schema=vol.Schema(
-                {vol.Required(CONF_OUTBOX_DIR, default=current_dir): str}
+                {
+                    vol.Required(CONF_OUTBOX_DIR, default=current_outbox): str,
+                    vol.Required(CONF_INBOX_DIR, default=current_inbox): str,
+                    vol.Required(CONF_AUTO_ACCEPT_FILES, default=current_auto_accept): bool,
+                }
             ),
             description_placeholders={
                 "hint": (
-                    "Dossier où la tablette dépose les clips audio/vidéo avant "
-                    "envoi. Doit correspondre au volume partagé avec le "
-                    "conteneur simplex-ws (voir DOCKER.md)."
+                    "Outbox : dossier où la tablette dépose les clips avant envoi "
+                    "(volume partagé avec simplex-bridge). Inbox : dossier (lecture "
+                    "seule) où le CLI écrit les fichiers REÇUS — nécessite un flag "
+                    "--files-folder côté bridge pointant vers ce même volume, voir "
+                    "DOCKER.md. Sans ça, les pièces jointes reçues s'affichent par "
+                    "leur nom mais ne sont pas lisibles dans la carte."
                 )
             },
         )
