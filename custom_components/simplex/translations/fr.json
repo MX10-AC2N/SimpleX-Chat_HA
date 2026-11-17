@@ -24,7 +24,7 @@
           "add_contact": "Ajouter un contact / groupe (coller un lien d'invitation)",
           "remove_contact": "Supprimer un contact",
           "show_targets": "Afficher les contacts configurés",
-          "settings": "Paramètres (dossier de dépôt)"
+          "settings": "Paramètres (dossiers dépôt/réception, fichiers)"
         }
       },
       "add_contact": {
@@ -49,7 +49,9 @@
         "title": "SimpleX Chat – Paramètres",
         "description": "{hint}",
         "data": {
-          "outbox_dir": "Dossier de dépôt (outbox)"
+          "outbox_dir": "Dossier de dépôt (outbox)",
+          "inbox_dir": "Dossier de réception (fichiers reçus, lecture seule)",
+          "auto_accept_files": "Accepter automatiquement les fichiers entrants"
         }
       }
     },
