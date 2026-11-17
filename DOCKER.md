@@ -212,6 +212,69 @@ Dans l'intégration : **Configurer → Paramètres** → vérifie que le
 défaut). Si tu changes ce chemin, change-le identiquement des deux côtés
 du compose.
 
+---
+
+## Volume en lecture seule pour les fichiers REÇUS (lecture inline dans la carte)
+
+Pour que `simplex-chat-card` puisse lire une image/un message vocal reçu au lieu
+d'afficher juste son nom, il faut que Home Assistant ait un accès **lecture
+seule** au dossier où le CLI `simplex-chat` écrit les fichiers entrants.
+
+**⚠️ Ce chemin n'est pas garanti par défaut** : le CLI n'a pas forcément de
+dossier de fichiers dédié tant qu'on ne le lui indique pas explicitement. Il
+faut patcher `entrypoint.sh` de ton fork `simplex-bridge` pour ajouter le flag
+`--files-folder` :
+
+```bash
+# Dans simplex-bridge/entrypoint.sh, dans le tableau FLAGS :
+FLAGS=(-d "$DATA_DIR/simplex" -p 5225 --files-folder "$DATA_DIR/received_files")
+```
+
+Comme `received_files` est un sous-dossier de `/data` (déjà le volume
+`simplex-data`), il hérite de la correction de propriétaire faite par
+l'entrypoint au premier démarrage — pas de permission à gérer en plus côté
+bridge.
+
+Monte ensuite ce même volume nommé, **en lecture seule**, dans Home Assistant :
+
+```yaml
+services:
+  homeassistant:
+    volumes:
+      - simplex-data:/config/simplex_inbox:ro   # :ro = lecture seule
+
+  simplex-bridge:
+    volumes:
+      - simplex-data:/data   # (déjà présent)
+```
+
+Comme c'est le **même volume** que la base de données (`simplex-data`), vu
+depuis HA il apparaît à sa racine : les fichiers reçus sont donc sous
+`/config/simplex_inbox/received_files/`, pas directement sous
+`/config/simplex_inbox/`.
+
+Dans l'intégration : **Configurer → Paramètres** → *dossier de réception*
+doit donc valoir `/config/simplex_inbox/received_files` (valeur par défaut).
+
+**Activation automatique des fichiers reçus** : l'intégration appelle une
+commande d'acceptation de fichier (best-effort, voir le docstring de
+`receive_file()` dans `websocket_client.py` — la syntaxe exacte de
+`APIReceiveFile` n'est pas confirmée pour toutes les versions du CLI, un
+fallback vers la commande historique `/fr <fileId>` est utilisé). Tu peux
+désactiver ce comportement dans **Paramètres** si tu préfères accepter les
+fichiers manuellement depuis l'appli SimpleX.
+
+**Limite connue** : sans ce volume (ou si `--files-folder` n'est pas
+configuré côté bridge), les pièces jointes reçues s'affichent quand même
+dans la carte — juste comme un nom de fichier non cliquable, pas de
+régression, juste pas de lecture inline.
+
+## Limites connues (v2.2)
+
+- **Pas de scroll infini vers l'historique ancien** : `simplex-chat-card` affiche les ~100 derniers messages par conversation (via `/chats`), sans pagination plus loin. La commande officielle paginée (`APIGetChats`) existe mais sa syntaxe exacte de pagination/requête JSON n'est pas documentée de façon stable d'une version de CLI à l'autre — on a préféré rester sur `/chats`, fiable, plutôt que deviner.
+- **Coches lu/envoyé/livré** (`✓`/`✓✓`) : best-effort, basées sur `meta.itemStatus.type` quand ce champ existe. Si ton CLI ne l'expose pas (ou sous une autre forme), tous les messages sortants restent affichés comme "envoyé" (une seule coche), sans erreur.
+- **Badge non-lus** sur l'écran de conversations : basé sur `chatStats.unreadCount` si `/chats` le renvoie. Absent → pas de badge (pas de faux 0 affiché).
+
 ## Security notes
 
 - The WebSocket API has **no authentication**. Treat it as a local, trusted channel.
