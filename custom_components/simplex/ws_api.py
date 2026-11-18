@@ -29,6 +29,11 @@ _LOGGER = logging.getLogger(__name__)
         vol.Required("type"): "simplex/history",
         vol.Required("alias"): str,
         vol.Optional("limit", default=50): vol.All(int, vol.Range(min=1, max=200)),
+        # Pass the `item_id` of the oldest message currently loaded by the
+        # card to page further into the past ("load older" / infinite
+        # scroll) — see SimplexWsClient.get_chat_history for the confirmed
+        # `/_get chat ... before=<id> count=<limit>` command this maps to.
+        vol.Optional("before_item_id"): vol.All(int, vol.Range(min=1)),
         vol.Optional("entry_id"): str,
     }
 )
@@ -36,7 +41,14 @@ _LOGGER = logging.getLogger(__name__)
 async def ws_get_history(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
 ) -> None:
-    """Return recent chat items for one alias, normalized for the chat card."""
+    """Return chat items for one alias, normalized for the chat card.
+
+    Without `before_item_id`: the most recent `limit` messages (initial
+    load). With it: up to `limit` messages older than that item — the
+    "load older" page. `has_more` tells the card whether another older
+    page likely exists (heuristic: a full page came back; the CLI doesn't
+    return an authoritative "more remain" flag for this specific query).
+    """
     alias = msg["alias"]
     try:
         data = _find_entry_data_for_alias(hass, alias, msg.get("entry_id"))
@@ -50,8 +62,11 @@ async def ws_get_history(
         return
 
     client: SimplexWsClient = data["client"]
+    limit = msg["limit"]
     try:
-        raw_items = await client.get_chat_history(chat_ref, limit=msg["limit"])
+        raw_items = await client.get_chat_history(
+            chat_ref, limit=limit, before_item_id=msg.get("before_item_id")
+        )
     except SimplexWsError as err:
         connection.send_error(msg["id"], "simplex_error", str(err))
         return
@@ -66,7 +81,15 @@ async def ws_get_history(
         if normalized is not None:
             messages.append(normalized)
 
-    connection.send_result(msg["id"], {"alias": alias, "chat_ref": chat_ref, "messages": messages})
+    connection.send_result(
+        msg["id"],
+        {
+            "alias": alias,
+            "chat_ref": chat_ref,
+            "messages": messages,
+            "has_more": len(raw_items) >= limit,
+        },
+    )
 
 
 @websocket_api.websocket_command(
@@ -82,10 +105,13 @@ async def ws_get_conversations(
     """Return one preview row per configured alias (last message + unread count).
 
     Backs the "home screen" conversation-list card
-    (`simplex-conversations-card`). `unread_count` is best-effort: it reads
-    `chatStats.unreadCount` from `/chats` if present, otherwise omits it
-    rather than guessing — this field's presence/shape isn't confirmed
-    against every CLI version.
+    (`simplex-conversations-card`). `unread_count` reads `chatStats.
+    unreadCount`, confirmed present on every chat preview by reading the
+    CLI's own source (`data ChatStats = ChatStats { unreadCount :: Int,
+    ... }` in src/Simplex/Chat/Messages.hs, v7.1.4 — the exact version
+    pinned in mx10-ac2n/simplex-bridge) — not a guess. The `.get()`/`in`
+    checks below are kept anyway as plain defensive coding, not because the
+    field's presence is in doubt.
     """
     from . import normalize_chat_item
 

@@ -554,61 +554,111 @@ class SimplexWsClient:
     async def get_chats(self, timeout: float = 20.0) -> list[dict[str, Any]]:
         """Return chat previews (one per contact/group) with their recent items.
 
-        Uses the plain `/chats` command, confirmed against the upstream
-        `simplex-chat` Rust bindings (`ChatResponse::Chats { chats, .. }`).
-        There is a newer, paginated `APIGetChats` (`/_get chats <userId>
-        <pagination> <query>`) in the Bot API, but its exact pagination/query
-        JSON shape is not stably documented across CLI versions, so we
-        deliberately stick to `/chats`: it returns every chat already
-        populated with its most recent items (commonly up to ~100), which is
-        enough to render an initial thread view. There is currently no
-        supported way to page further back than that from here.
+        Uses `/chats all` (legacy `LastChats` command). Confirmed by reading
+        the actual Haskell source of the CLI version pinned in
+        mx10-ac2n/simplex-bridge (v7.1.4 — re-checked against v7.0.2 too,
+        unchanged between the two, src/Simplex/Chat/Library/Commands.hs):
+
+          ("/chats" <|> "/cs") *> (LastChats <$> (" all" $> Nothing <|> ...))
+          LastChats count_ -> ... let count = fromMaybe 5000 count_ ...
+
+        IMPORTANT: bare `/chats` (no argument) parses to `LastChats (Just
+        20)` — only the 20 *most recently active* conversations. We
+        deliberately always pass `all` (→ capped at 5000 server-side, not
+        truly unbounded, but more than any home setup will hit) so a
+        household with more than 20 contacts doesn't silently lose the
+        older ones from the conversation list / LLM tool / events.
         """
-        resp = await self._rpc_cmd("/chats", timeout=timeout)
+        resp = await self._rpc_cmd("/chats all", timeout=timeout)
         chats = resp.get("chats") or []
         return chats if isinstance(chats, list) else []
 
     async def get_chat_history(
-        self, chat_ref: str, limit: int = 50, timeout: float = 20.0
+        self,
+        chat_ref: str,
+        limit: int = 50,
+        before_item_id: int | None = None,
+        timeout: float = 20.0,
     ) -> list[dict[str, Any]]:
-        """Return up to `limit` recent chat items for a single contact/group.
+        """Return up to `limit` chat items for a single contact/group.
 
-        See `get_chats()` for why this is a client-side filter over `/chats`
-        rather than a dedicated single-chat history command.
+        Uses the real per-chat history command `APIGetChat`, confirmed from
+        the same source as `get_chats()` above (v7.1.4, re-checked against
+        v7.0.2 — unchanged between the two):
+
+          "/_get chat " *> (APIGetChat <$> chatRefP <*> optional (" content=" ...)
+            <* A.space <*> chatPaginationP <*> optional (" search=" ...))
+          chatPaginationP =
+            (CPLast <$ "count=" <*> A.decimal)
+              <|> (CPBefore <$ "before=" <*> A.decimal <* A.space <* "count=" <*> A.decimal)
+              <|> ...
+
+        i.e. `/_get chat <chatRef> count=<limit>` for the most recent
+        `limit` items, or `/_get chat <chatRef> before=<itemId> count=<limit>`
+        to page further into the past than `limit` — this is what makes
+        real infinite scroll possible (see `ws_api.py`'s `simplex/history`
+        command and the chat card's "load older" behaviour).
+
+        Response is `CRApiChat {chat :: AChat, ...}` → JSON `{"type":
+        "apiChat", "chat": {"chatInfo", "chatItems", "chatStats"}, ...}`
+        (confirmed: `AChat`'s `ToJSON` instance just re-encodes the
+        underlying `Chat` record as-is — same shape already used by
+        `get_chats()` above).
         """
-        for chat in await self.get_chats(timeout=timeout):
-            info = chat.get("chatInfo") or {}
-            contact = info.get("contact") or {}
-            group = info.get("groupInfo") or {}
-            ref = None
-            if contact.get("contactId") is not None:
-                ref = f"@{contact['contactId']}"
-            elif group.get("groupId") is not None:
-                ref = f"#{group['groupId']}"
-            if ref == chat_ref:
-                items = chat.get("chatItems") or []
-                return items[-limit:] if isinstance(items, list) else []
-        return []
+        cmd = f"/_get chat {chat_ref} "
+        cmd += f"before={before_item_id} count={limit}" if before_item_id else f"count={limit}"
+        try:
+            resp = await self._rpc_cmd(cmd, timeout=timeout)
+            chat = resp.get("chat") or {}
+            items = chat.get("chatItems") or []
+            return items if isinstance(items, list) else []
+        except SimplexWsError as err:
+            if before_item_id is not None:
+                # No fallback for "load older": `/chats` only ever carries
+                # the most recent window, it cannot serve a `before=` page.
+                raise
+            _LOGGER.debug(
+                "get_chat_history: /_get chat failed (%s), falling back to /chats all", err
+            )
+            for chat in await self.get_chats(timeout=timeout):
+                info = chat.get("chatInfo") or {}
+                contact = info.get("contact") or {}
+                group = info.get("groupInfo") or {}
+                ref = None
+                if contact.get("contactId") is not None:
+                    ref = f"@{contact['contactId']}"
+                elif group.get("groupId") is not None:
+                    ref = f"#{group['groupId']}"
+                if ref == chat_ref:
+                    items = chat.get("chatItems") or []
+                    return items[-limit:] if isinstance(items, list) else []
+            return []
 
     async def receive_file(self, file_id: int, timeout: float = 60.0) -> dict[str, Any]:
-        """Accept an incoming file transfer (APIReceiveFile / legacy `/fr`).
+        """Accept an incoming file transfer.
 
-        Official shape per the TS client reference (apiReceiveFile):
-          ReceiveFile { fileId, userApprovedRelays: true } → `/_receive`.
-        The exact textual command encoding of that record for `/_receive`
-        isn't independently confirmed against every CLI version the way
-        `/_send`/`/_connect` were (verified against this project's actual
-        bridge), so this is still a best-guess modern form, with the
-        long-standing classic CLI command `/fr <fileId>` as fallback — that
-        one has been stable across CLI releases.
+        CORRECTED: there is no `/_receive` command — that was a mistaken
+        guess carried over from conflating the Haskell *data type* field
+        name (`ReceiveFile { fileId, userApprovedRelays, ... }`) with the
+        actual CLI *text* command. Confirmed directly from the pinned CLI's
+        own source (`src/Simplex/Chat/Library/Commands.hs`, checked against
+        the CLI version actually pinned in mx10-ac2n/simplex-bridge
+        (v7.1.4 — re-checked against v7.0.2 too, unchanged between the two):
+
+          ("/freceive " <|> "/fr ") *>
+            (ReceiveFile <$> A.decimal
+                         <*> (" approved_relays=" *> onOffP <|> pure False)
+                         <*> optional (" encrypt=" *> onOffP)
+                         <*> optional (" inline=" *> onOffP)
+                         <*> optional (A.space *> filePath))
+
+        So the on-the-wire parameter is `approved_relays=` (snake_case),
+        not `userApprovedRelays` — that name only exists internally/in the
+        JSON record and in third-party API bindings describing it, never
+        in the text command itself. `/fr` and `/freceive` are the same
+        command (short alias), confirmed by the same source line.
         """
-        try:
-            return await self._rpc_cmd(
-                f"/_receive {file_id} userApprovedRelays=on", timeout=timeout
-            )
-        except SimplexWsError as err:
-            _LOGGER.debug("receive_file: modern /_receive failed (%s), trying classic /fr", err)
-            return await self._rpc_cmd(f"/fr {file_id}", timeout=timeout)
+        return await self._rpc_cmd(f"/fr {file_id} approved_relays=on", timeout=timeout)
 
     async def get_user_address(self, timeout: float = 10.0) -> str | None:
         """Return the long-term user address if one exists."""
