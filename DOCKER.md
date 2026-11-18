@@ -269,11 +269,13 @@ configuré côté bridge), les pièces jointes reçues s'affichent quand même
 dans la carte — juste comme un nom de fichier non cliquable, pas de
 régression, juste pas de lecture inline.
 
-## Limites connues (v2.2)
+## Limites connues (v2.3)
 
-- **Pas de scroll infini vers l'historique ancien** : `simplex-chat-card` affiche les ~100 derniers messages par conversation (via `/chats`), sans pagination plus loin. La commande officielle paginée (`APIGetChats`) existe mais sa syntaxe exacte de pagination/requête JSON n'est pas documentée de façon stable d'une version de CLI à l'autre — on a préféré rester sur `/chats`, fiable, plutôt que deviner.
+- **Scroll infini vers l'historique ancien** : implémenté depuis la v2.3. `simplex-chat-card` charge d'abord les messages les plus récents, puis récupère les pages précédentes au fur et à mesure que tu remontes dans la conversation (déclenché automatiquement en haut du fil). Côté bridge, cela utilise la commande `/_get chat <ref> before=<id> count=<limite>` (`APIGetChat`), dont la syntaxe exacte a été confirmée en lisant directement le code source Haskell du CLI **v7.1.4** (la version réellement épinglée dans `ghcr.io/mx10-ac2n/simplex-bridge` — vérifié aussi contre v7.0.2, inchangé entre les deux), et non plus devinée via des bindings tiers.
+- **Liste des conversations complète** : corrigé en v2.3. La commande `/chats` (sans argument) ne renvoie que les **20 conversations les plus récemment actives** côté CLI (`LastChats (Just 20)`) — un foyer avec plus de 20 contacts perdait silencieusement les plus anciens de l'écran d'accueil / des événements. L'intégration utilise maintenant `/chats all`, confirmé par le même examen du code source (v7.1.4).
+- **Réception de fichiers corrigée en v2.3** : la commande utilisée jusqu'ici (`/_receive <fileId> userApprovedRelays=on`) n'existe pas côté CLI — c'était une confusion entre le nom du champ interne Haskell/JSON (`userApprovedRelays`) et le vrai texte de commande. La vraie commande, confirmée dans le code source, est `/fr <fileId> approved_relays=on` (alias : `/freceive`). Corrigé dans `websocket_client.py::receive_file()`.
 - **Coches lu/envoyé/livré** (`✓`/`✓✓`) : best-effort, basées sur `meta.itemStatus.type` quand ce champ existe. Si ton CLI ne l'expose pas (ou sous une autre forme), tous les messages sortants restent affichés comme "envoyé" (une seule coche), sans erreur.
-- **Badge non-lus** sur l'écran de conversations : basé sur `chatStats.unreadCount` si `/chats` le renvoie. Absent → pas de badge (pas de faux 0 affiché).
+- **Badge non-lus** sur l'écran de conversations : basé sur `chatStats.unreadCount`, confirmé présent sur chaque aperçu de conversation (champ `ChatStats.unreadCount` du code source, v7.1.4) — n'est plus du best-effort.
 
 ## Security notes
 
