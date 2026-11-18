@@ -37,6 +37,8 @@ class SimplexChatCard extends HTMLElement {
     this._messages = [];
     this._unsubscribe = null;
     this._loaded = false;
+    this._hasMore = false;
+    this._loadingMore = false;
     this._recorder = null;
     this._recordedChunks = [];
     this._recordKind = null;
@@ -93,10 +95,71 @@ class SimplexChatCard extends HTMLElement {
         ...(this._config.entry_id ? { entry_id: this._config.entry_id } : {}),
       });
       this._messages = (result.messages || []).slice();
+      this._hasMore = !!result.has_more;
       this._loaded = true;
       this._renderMessages(true);
+      this._attachScrollListener();
     } catch (err) {
       this._renderError(err.message || String(err));
+    }
+  }
+
+  // "Load older" — triggered when the user scrolls near the top of the
+  // thread. Uses the oldest currently-loaded message's item_id as the
+  // `before_item_id` cursor (see ws_api.py's "simplex/history" and
+  // SimplexWsClient.get_chat_history for the underlying `/_get chat ...
+  // before=<id> count=<limit>` command).
+  _attachScrollListener() {
+    const container = this.shadowRoot.getElementById("messages");
+    if (!container || container.dataset.scrollBound) return;
+    container.dataset.scrollBound = "1";
+    container.addEventListener("scroll", () => {
+      if (container.scrollTop < 60) this._loadOlder();
+    });
+  }
+
+  async _loadOlder() {
+    if (this._loadingMore || !this._hasMore || !this._messages.length) return;
+    const sorted = this._messages.slice().sort((a, b) => (a.timestamp || "").localeCompare(b.timestamp || ""));
+    const oldest = sorted[0];
+    if (!oldest || !oldest.item_id) {
+      // No usable cursor (e.g. the oldest loaded item has no item_id) —
+      // nothing more we can safely page from.
+      this._hasMore = false;
+      return;
+    }
+    this._loadingMore = true;
+    const container = this.shadowRoot.getElementById("messages");
+    const prevHeight = container ? container.scrollHeight : 0;
+    this._renderMessages(false, true);
+
+    try {
+      const result = await this._hass.connection.sendMessagePromise({
+        type: "simplex/history",
+        alias: this._config.alias,
+        limit: this._config.history_limit,
+        before_item_id: oldest.item_id,
+        ...(this._config.entry_id ? { entry_id: this._config.entry_id } : {}),
+      });
+      const older = result.messages || [];
+      this._hasMore = !!result.has_more;
+      // Dedup by item_id in case of any overlap at the page boundary.
+      const existingIds = new Set(this._messages.map((m) => m.item_id).filter((v) => v != null));
+      const toPrepend = older.filter((m) => m.item_id == null || !existingIds.has(m.item_id));
+      this._messages = toPrepend.concat(this._messages);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("simplex-chat-card: could not load older messages", err);
+      this._hasMore = false;
+    } finally {
+      this._loadingMore = false;
+      this._renderMessages(false);
+      // Preserve the visual scroll position: after prepending, restore the
+      // same distance from the (now taller) top instead of jumping.
+      if (container) {
+        const newHeight = container.scrollHeight;
+        container.scrollTop += newHeight - prevHeight;
+      }
     }
   }
 
@@ -201,6 +264,10 @@ class SimplexChatCard extends HTMLElement {
           color: #9fb3ba; text-align: center; margin-top: 30px; font-size: 0.9em;
         }
         .error { color: #e08a8a; }
+        .load-older {
+          color: #7d939a; text-align: center; font-size: 0.8em;
+          padding: 8px 0 4px;
+        }
 
         .composer {
           flex: 0 0 auto;
@@ -291,7 +358,10 @@ class SimplexChatCard extends HTMLElement {
     if (el) el.innerHTML = `<div class="error">${this._escape(message)}</div>`;
   }
 
-  _renderMessages(scrollToBottom) {
+  // `showLoadingTop`: renders a small spinner row above the oldest message
+  // while a "load older" page is in flight (set by _loadOlder(); callers
+  // doing a normal render leave it undefined/false).
+  _renderMessages(scrollToBottom, showLoadingTop) {
     const container = this.shadowRoot.getElementById("messages");
     if (!container) return;
 
@@ -306,14 +376,20 @@ class SimplexChatCard extends HTMLElement {
       .slice()
       .sort((a, b) => (a.timestamp || "").localeCompare(b.timestamp || ""));
 
-    container.innerHTML = sorted
-      .map((m) => {
-        const dir = m.direction === "outgoing" ? "out" : "in";
-        const time = this._formatTime(m.timestamp);
-        const fileHtml = this._renderFile(m.file);
-        const textHtml = m.text ? this._escape(m.text) : "";
-        const ticksHtml = dir === "out" ? this._renderTicks(m.status) : "";
-        return `
+    const loaderHtml = showLoadingTop
+      ? '<div class="load-older">Chargement des messages précédents…</div>'
+      : "";
+
+    container.innerHTML =
+      loaderHtml +
+      sorted
+        .map((m) => {
+          const dir = m.direction === "outgoing" ? "out" : "in";
+          const time = this._formatTime(m.timestamp);
+          const fileHtml = this._renderFile(m.file);
+          const textHtml = m.text ? this._escape(m.text) : "";
+          const ticksHtml = dir === "out" ? this._renderTicks(m.status) : "";
+          return `
           <div class="row ${dir}">
             <div class="bubble ${dir}">
               ${fileHtml}
@@ -321,8 +397,8 @@ class SimplexChatCard extends HTMLElement {
               <span class="meta">${time}${m.edited ? " · modifié" : ""}${ticksHtml}</span>
             </div>
           </div>`;
-      })
-      .join("");
+        })
+        .join("");
 
     if (scrollToBottom) {
       container.scrollTop = container.scrollHeight;
