@@ -8,11 +8,14 @@
  * `simplex-chat-card` for that same alias).
  *
  * Backend requirement: the `simplex` integration's HA websocket command
- * "simplex/conversations" (v2.2+).
+ * "simplex/conversations" (v2.2+, now backed by `/chats all` since v2.3 so
+ * households with more than 20 contacts all show up — see DOCKER.md).
  *
- * Note on unread badges: SimpleX's `/chats` response may or may not carry
- * a `chatStats.unreadCount` depending on the CLI version in your bridge.
- * When it's absent the row just shows no badge, it does not guess a count.
+ * Note on unread badges: reads `chatStats.unreadCount`, confirmed present
+ * on every chat preview (checked against the CLI's own Haskell source,
+ * v7.1.4 — the version pinned in mx10-ac2n/simplex-bridge, see ws_api.py).
+ * The `.get()` check is kept as plain defensive coding; when it's absent
+ * the row just shows no badge rather than a guessed/wrong count.
  *
  * Install: copy this file to /config/www/simplex-conversations-card/ and
  * add it as a Lovelace resource:
