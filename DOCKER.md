@@ -10,7 +10,7 @@ The integration is a **client only**. It does **not** embed the `simplex-chat` b
 
 ```
 ┌─────────────────────┐           WebSocket          ┌──────────────────────┐
-│      Home Assistant      │  ws://simplex-ws:5225       │  simplex-ws            │
+│      Home Assistant     │  ws://simplex-ws:5225       │  simplex-ws            │
 │  (this integration) │ ─────────────────────────► │  simplex-chat -p 5225  │
 └─────────────────────┘                            └──────────────────────┘
 ```
