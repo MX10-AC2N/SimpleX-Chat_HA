@@ -15,12 +15,6 @@ The integration is a **client only**. It does **not** embed the `simplex-chat` b
 └─────────────────────┘                            └──────────────────────┘
 ```
 
----
-
-> ⚠️ **Correctif important (v2)** : `libre7/simplex-bridge` fait écouter son démon **uniquement sur `127.0.0.1` à l'intérieur de son propre conteneur**. Sur un bridge network Docker classique, `ws://simplex-ws:5225` n'est donc **pas joignable** depuis le conteneur `homeassistant`, même sur le même réseau — ce n'est pas un problème de DNS. Le fichier [`docker-compose.yml`](docker-compose.yml) à la racine du dépôt documente les deux correctifs possibles (host networking, ou un sidecar `socat` qui republie le port). Utilise ce fichier plutôt que les extraits isolés ci-dessous si tu démarres de zéro.
-
-> ⚠️ **Correctif important (v2)** : `libre7/simplex-bridge` fait écouter son démon **uniquement sur `127.0.0.1` à l'intérieur de son propre conteneur**. Sur un bridge network Docker classique, `ws://simplex-ws:5225` n'est donc **pas joignable** depuis le conteneur `homeassistant`, même sur le même réseau — ce n'est pas un problème de DNS. Le fichier [`docker-compose.yml`](docker-compose.yml) à la racine du dépôt documente les deux correctifs possibles (host networking, ou un sidecar `socat` qui republie le port). Utilise ce fichier plutôt que les extraits isolés ci-dessous si tu démarres de zéro.
-
 ## Option A – Same Docker Compose stack (recommended)
 
 Add a `simplex-ws` service next to your existing `homeassistant` service and put both on the **same Docker network**.
