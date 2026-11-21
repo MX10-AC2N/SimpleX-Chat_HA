@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "SimpleX Chat",
-        "description": "Connect Home Assistant to a running SimpleX Chat CLI instance (WebSocket mode).\n\nDefault: `ws://127.0.0.1:5225`",
+        "description": "Connect Home Assistant to a running SimpleX Chat CLI instance (WebSocket mode).\n\nDefault: `ws://127.0.0.1:5225`\n\nIf Home Assistant and simplex-bridge both use host networking on the same Linux host, use `ws://127.0.0.1:5225`.",
         "data": {
           "ws_url": "WebSocket URL"
         }
