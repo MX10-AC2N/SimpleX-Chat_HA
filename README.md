@@ -35,8 +35,8 @@ If Home Assistant runs in Docker, you **must** run a SimpleX Chat WebSocket daem
 simplex-chat -p 5225
 ```
 
-When Home Assistant runs in Docker, do **not** use `127.0.0.1` from inside the HA container.
-See the dedicated guide: **[DOCKER.md](DOCKER.md)**.
+When Home Assistant and `simplex-bridge` both use `network_mode: host` on the same Linux host, use `ws://127.0.0.1:5225` (the default). For bridge-network Docker deployments, use the bridge address reachable from the HA container instead.
+See **[DOCKER.md](DOCKER.md)** for the supported host setup.
 
 2. Home Assistant **2025.8+** (2026.x recommended).
 

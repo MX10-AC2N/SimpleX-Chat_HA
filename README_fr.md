@@ -37,8 +37,8 @@ Si Home Assistant tourne sous Docker, vous **devez** lancer un daemon SimpleX Ch
 simplex-chat -p 5225
 ```
 
-Avec Home Assistant en Docker, ne pas utiliser `127.0.0.1` depuis le conteneur HA.
-Voir le guide dédié : **[DOCKER.md](DOCKER.md)**.
+Si Home Assistant et `simplex-bridge` utilisent tous les deux `network_mode: host` sur le même hôte Linux, utilisez `ws://127.0.0.1:5225` (valeur par défaut). Avec un réseau Docker bridge, utilisez plutôt une adresse joignable depuis le conteneur HA.
+Voir **[DOCKER.md](DOCKER.md)** pour la configuration host.
 
 2. Home Assistant **2025.8+** (recommandé 2026.x).
 
