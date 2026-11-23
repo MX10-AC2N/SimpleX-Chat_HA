@@ -431,7 +431,7 @@ def normalize_chat_item(
         "file": file_info,
         "direction": direction,
         "status": status,
-        "item_id": meta.get("itemId"),
+        "item_id": (ci.get("itemId") if isinstance(ci, dict) else None) or meta.get("itemId"),
         "timestamp": meta.get("itemTs") or meta.get("createdAt"),
         "edited": bool(meta.get("itemEdited")),
     }
