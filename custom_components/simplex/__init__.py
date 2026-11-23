@@ -179,6 +179,69 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 # Helpers
 # ------------------------------------------------------------------
 
+# Items protocolaires générés automatiquement par le CLI v7 à l'établissement
+# d'une connexion (chatBanner, infos E2EE, annonces de features). Cartographiés
+# en direct par la suite ws-validate (CLI 7.1.4.0) : ils portent un itemText
+# non vide ("chat banner"), il faut donc les filtrer PAR TYPE et non par
+# absence de texte, sinon chaque connexion génère des bulles/event fantômes.
+SYSTEM_CONTENT_TYPES = frozenset(
+    {
+        "chatBanner",
+        "rcvDirectE2EEInfo",
+        "sndDirectE2EEInfo",
+        "rcvChatFeature",
+        "sndChatFeature",
+        "intro",
+        "autoReply",
+    }
+)
+
+# Types de contenu rendus comme une bulle dans la carte.
+RENDERABLE_CONTENT_TYPES = (
+    "text",
+    "sndMsgContent",
+    "rcvMsgContent",
+    "file",
+    "image",
+    "voice",
+    "video",
+)
+
+
+def _unwrap_chat_item(item: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return (chat_info, chat_item) for both known serialisations.
+
+    CLI v6+/v7 (live events /_subscribe, /chats) wrap each item:
+        {"chatInfo": {...}, "chatItem": {"itemId", "meta", "content", ...}}
+    Legacy / flat forms (older CLIs, some RPC replies) hand the chatItem
+    directly. Reading `meta` off the wrapper silently yields an empty dict —
+    which is exactly the bug that made item_id/timestamp/edited always empty.
+    """
+    if not isinstance(item, dict):
+        return {}, {}
+    chat_info = item.get("chatInfo") or {}
+    chat_item = item.get("chatItem")
+    if isinstance(chat_item, dict):
+        return chat_info if isinstance(chat_info, dict) else {}, chat_item
+    return chat_info if isinstance(chat_info, dict) else {}, item
+
+
+def _msg_content(chat_item: dict[str, Any]) -> dict[str, Any]:
+    """Return the discriminated message content, whichever serialisation:
+    - v7 short form  : chatItem.content.{type,text,...}
+    - documented form: chatItem.content.msgContent.{type,text,fileName,...}
+    - flat form      : chatItem.msgContent
+    """
+    content = chat_item.get("content")
+    if isinstance(content, dict):
+        mc = content.get("msgContent")
+        if isinstance(mc, dict):
+            return mc
+        if "type" in content:
+            return content
+    mc = chat_item.get("msgContent")
+    return mc if isinstance(mc, dict) else {}
+
 
 def _pending_incoming_file_id(item: dict[str, Any]) -> int | None:
     """Return the fileId of an incoming file that hasn't been accepted yet.
@@ -189,9 +252,14 @@ def _pending_incoming_file_id(item: dict[str, Any]) -> int | None:
     one of the clearly-terminal ones. Worst case this calls receive_file on
     an already-accepted file, which the CLI just no-ops / errors on
     harmlessly (logged at debug level, not raised to the user).
+
+    Handles the v7 wrapper (file metadata lives in chatItem.meta.itemFile)
+    as well as the legacy placements.
     """
-    content = item.get("content") or {}
-    file_status = item.get("file") or content.get("file")
+    _, chat_item = _unwrap_chat_item(item)
+    meta = chat_item.get("meta") or {}
+    content = chat_item.get("content") or {}
+    file_status = meta.get("itemFile") or chat_item.get("file") or content.get("file")
     if not isinstance(file_status, dict):
         return None
     status_type = (file_status.get("fileStatus") or {}).get("type") if isinstance(
@@ -238,26 +306,66 @@ def normalize_chat_item(
 
     Returns None for item kinds we don't render as a bubble (reactions,
     deletions, system markers, …).
+
+    Serialisation proven against CLI 7.1.4.0 (ws-validate reference run):
+
+        resp.chatItems[] = {                      <- wrapper
+          "chatInfo": {"type": "direct",
+                       "contact": {"contactId": 3, "localDisplayName": "AC2N", ...}},
+          "chatItem": {"itemId": 17,
+                       "meta":  {"chatDir": {"type": "directRcv"},
+                                 "itemText": "Alors tu reçois", ...},
+                       "content": {"type": "text", "text": "Alors tu reçois", ...}}}
+
+    Both the v7 wrapper and legacy flat shapes are supported here, so this
+    keeps working with older CLIs and with whatever shape /chats returns.
     """
-    content = item.get("content") or {}
-    msg_content = content.get("msgContent") or {}
-    msg_type = content.get("type") or msg_content.get("type")
-    if msg_type not in ("text", "sndMsgContent", "rcvMsgContent", "file", "image", "voice"):
+    chat_info, chat_item = _unwrap_chat_item(item)
+    if not chat_item:
         return None
 
-    text = content.get("text") or msg_content.get("text") or ""
+    meta = chat_item.get("meta") if isinstance(chat_item.get("meta"), dict) else {}
+    msg_content = _msg_content(chat_item)
+    msg_type = msg_content.get("type")
 
-    # File / voice / image attachments: surface what we can even without
-    # being able to stream the bytes (see DOCKER.md "received files" note).
+    # System/protocol items (chat banner, E2EE info, chat-feature notices):
+    # filtered by type, before anything else — they carry a non-empty
+    # itemText ("chat banner"), so a "not text and not file" test would NOT
+    # catch them.
+    if msg_type in SYSTEM_CONTENT_TYPES:
+        return None
+
+    if msg_type not in RENDERABLE_CONTENT_TYPES:
+        return None
+
+    # Display text: meta.itemText is the reliable CLI v7 field (present on
+    # text messages and on file/image captions alike); fall back to the
+    # older msgContent placements.
+    text = (
+        meta.get("itemText")
+        or msg_content.get("text")
+        or msg_content.get("fileName")
+        or ""
+    )
+
+    # File / voice / image / video attachments: surface what we can even
+    # without being able to stream the bytes (see DOCKER.md "received files"
+    # note). CLI v7 exposes the transfer metadata in meta.itemFile.
     file_info = None
-    file_status = item.get("file") or content.get("file")
-    if isinstance(file_status, dict) or msg_type in ("file", "image", "voice"):
+    file_status = meta.get("itemFile") or chat_item.get("file") or msg_content.get("file")
+    if isinstance(file_status, dict) or msg_type in ("file", "image", "voice", "video"):
         file_status = file_status if isinstance(file_status, dict) else {}
         file_info = {
             "file_id": file_status.get("fileId"),
             "name": file_status.get("fileName") or msg_content.get("fileName"),
             "size": file_status.get("fileSize"),
-            "kind": "image" if msg_type == "image" else "voice" if msg_type == "voice" else "file",
+            "kind": (
+                "image"
+                if msg_type == "image"
+                else "voice"
+                if msg_type == "voice"
+                else "file"  # video maps to "file" so the card needs no change
+            ),
         }
         if inbox_dir:
             file_info["media_url"] = _resolve_media_url(file_info, inbox_dir)
@@ -265,7 +373,6 @@ def normalize_chat_item(
     if not text and not file_info:
         return None
 
-    chat_info = item.get("chatInfo") or {}
     contact = chat_info.get("contact") or {}
     group = chat_info.get("groupInfo") or {}
     chat_ref = None
@@ -286,13 +393,23 @@ def normalize_chat_item(
                 alias = a
                 break
 
-    meta = item.get("meta") or {}
-    direction_meta = meta.get("direction")
-    direction = (
-        "outgoing"
-        if isinstance(direction_meta, dict) and direction_meta.get("type") == "directSnd"
-        else "incoming"
-    )
+    # Direction: CLI v7 puts it in meta.chatDir.type ("directRcv" /
+    # "directSnd", "groupRcv" / "groupSnd"); legacy versions used
+    # meta.direction. Everything ending in "snd" is outgoing — reading the
+    # full type instead of comparing to "directSnd" exactly also covers
+    # group chats. Unreadable shapes fall back to "incoming" (same as the
+    # old behaviour) rather than guessing wrong.
+    chat_dir = meta.get("chatDir") if isinstance(meta.get("chatDir"), dict) else None
+    if chat_dir is not None:
+        dir_type = chat_dir.get("type")
+    else:
+        direction_meta = meta.get("direction")
+        dir_type = (
+            direction_meta.get("type")
+            if isinstance(direction_meta, dict)
+            else direction_meta
+        )
+    direction = "outgoing" if str(dir_type or "").lower().endswith("snd") else "incoming"
 
     # Best-effort read/delivered status for outgoing bubbles (✓ / ✓✓ in the
     # card). The exact `itemStatus.type` strings (sndNew/sndSent/sndRcvd/
