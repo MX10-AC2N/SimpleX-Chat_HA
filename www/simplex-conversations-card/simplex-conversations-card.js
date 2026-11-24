@@ -1,11 +1,15 @@
 /**
  * SimpleX Conversations Card
  * -----------------------------------------------------------------------
- * The "home screen" of a messaging app: one row per configured SimpleX
- * contact/group, with an avatar, the last message preview, a timestamp and
- * an unread badge (when the CLI reports one — see note below). Tapping a
+ * The "home screen" of a messaging app: one row per SimpleX contact/group
+ * known to the bot, with an avatar, the last message preview, a timestamp
+ * and an unread badge (when the CLI reports one — see note below). Tapping a
  * row navigates to a configured dashboard view (meant to hold a
  * `simplex-chat-card` for that same alias).
+ *
+ * Since the integration auto-discovers the CLI's contacts and groups, this
+ * card lists every conversation without any manual setup — the rows appear
+ * as soon as the bot knows the contact.
  *
  * Backend requirement: the `simplex` integration's HA websocket command
  * "simplex/conversations" (v2.2+, now backed by `/chats all` since v2.3 so
@@ -67,6 +71,10 @@ class SimplexConversationsCard extends HTMLElement {
       this._unsubscribe();
       this._unsubscribe = null;
     }
+    if (this._unsubscribeExtra) {
+      this._unsubscribeExtra();
+      this._unsubscribeExtra = null;
+    }
   }
 
   async _load() {
@@ -86,10 +94,19 @@ class SimplexConversationsCard extends HTMLElement {
   _subscribe() {
     // Any new message can change a row's preview/unread count — simplest
     // correct behaviour is to just refetch the (small) conversation list.
-    this._hass.connection
-      .subscribeEvents(() => this._load(), "simplex_message_received")
+    // `simplex_targets_updated` covers the other case: a contact or group
+    // that was just discovered must appear without a page reload.
+    const reload = () => this._load();
+    this.hass.connection
+      .subscribeEvents(reload, "simplex_message_received")
       .then((unsub) => {
         this._unsubscribe = unsub;
+      })
+      .catch(() => {});
+    this.hass.connection
+      .subscribeEvents(reload, "simplex_targets_updated")
+      .then((unsub) => {
+        this._unsubscribeExtra = unsub;
       })
       .catch(() => {});
   }
@@ -119,6 +136,7 @@ class SimplexConversationsCard extends HTMLElement {
           display: flex; align-items: center; justify-content: center;
           color: #fff; font-weight: 600;
         }
+        .avatar.group { background: linear-gradient(135deg, #4a7fd4, #3567b8); font-size: 1.25em; }
         .body { flex: 1 1 auto; min-width: 0; }
         .name-row { display: flex; justify-content: space-between; gap: 8px; }
         .name { color: #eef3f5; font-weight: 600; font-size: 0.97em; }
@@ -154,23 +172,44 @@ class SimplexConversationsCard extends HTMLElement {
     if (!el) return;
     if (!this._conversations.length) {
       el.innerHTML = this._loaded
-        ? '<div class="empty">Aucun contact configuré.</div>'
+        ? '<div class="empty">Aucun contact pour l’instant. Les contacts et groupes du bot SimpleX apparaissent ici automatiquement.</div>'
         : '<div class="empty">Chargement…</div>';
       return;
     }
 
-    el.innerHTML = this._conversations
+    // Most recent conversation first.
+    const rows = this._conversations.slice().sort((a, b) => {
+      const ta = a.last_message && a.last_message.timestamp ? a.last_message.timestamp : 0;
+      const tb = b.last_message && b.last_message.timestamp ? b.last_message.timestamp : 0;
+      if (tb !== ta) return tb - ta;
+      return String(a.name || "").localeCompare(String(b.name || ""));
+    });
+
+    el.innerHTML = rows
       .map((c) => {
         const last = c.last_message;
-        const preview = last ? (last.file ? `📎 ${this._escape(last.file.name || "Fichier")}` : this._escape(last.text || "")) : "";
+        let preview = "";
+        if (last) {
+          if (last.file) {
+            preview = `📎 ${this._escape(last.file.name || "Fichier")}`;
+          } else {
+            preview = this._escape(last.text || "");
+          }
+          // Outgoing messages are prefixed so a row is never ambiguous.
+          if (last.direction === "outgoing") preview = `↩ ${preview}`;
+        }
         const time = last ? this._formatTime(last.timestamp) : "";
         const badge =
           c.unread_count && c.unread_count > 0
             ? `<div class="badge">${c.unread_count > 99 ? "99+" : c.unread_count}</div>`
             : "";
+        const avatar =
+          c.type === "group"
+            ? '<div class="avatar group">👥</div>'
+            : `<div class="avatar">${this._initial(c.name)}</div>`;
         return `
           <div class="row" data-alias="${this._escape(c.alias)}">
-            <div class="avatar">${this._initial(c.name)}</div>
+            ${avatar}
             <div class="body">
               <div class="name-row">
                 <span class="name">${this._escape(c.name)}</span>
