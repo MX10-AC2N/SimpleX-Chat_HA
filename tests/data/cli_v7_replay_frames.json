@@ -1,0 +1,7 @@
+[
+  "{\"corrId\":null,\"resp\":{\"type\":\"contactConnecting\",\"contact\":{\"localDisplayName\":\"AC2N\",\"contactId\":3}}}",
+  "{\"corrId\":null,\"resp\":{\"type\":\"contactConnected\",\"contact\":{\"localDisplayName\":\"AC2N\",\"contactId\":3}}}",
+  "{\"corrId\":null,\"resp\":{\"type\":\"newChatItems\",\"user\":{\"userId\":1,\"localDisplayName\":\"SimpleX Bridge\"},\"chatItems\":[{\"chatInfo\":{\"type\":\"direct\",\"contact\":{\"localDisplayName\":\"AC2N\",\"contactId\":3}},\"chatItem\":{\"itemId\":13,\"meta\":{\"chatDir\":{\"type\":\"directRcv\"},\"itemText\":\"chat banner\"},\"content\":{\"type\":\"chatBanner\"}}},{\"chatInfo\":{\"type\":\"direct\",\"contact\":{\"localDisplayName\":\"AC2N\",\"contactId\":3}},\"chatItem\":{\"itemId\":14,\"meta\":{\"chatDir\":{\"type\":\"directRcv\"},\"itemText\":\"E2EE info\"},\"content\":{\"type\":\"rcvDirectE2EEInfo\"}}}]}}",
+  "{\"corrId\":null,\"resp\":{\"type\":\"newChatItems\",\"chatItems\":[{\"chatInfo\":{\"type\":\"direct\",\"contact\":{\"localDisplayName\":\"AC2N\",\"contactId\":3}},\"chatItem\":{\"itemId\":16,\"meta\":{\"chatDir\":{\"type\":\"directSnd\"},\"itemText\":\"ping de validation ws-validate.py\"},\"content\":{\"type\":\"text\"}}}]}}",
+  "{\"corrId\":null,\"resp\":{\"type\":\"newChatItems\",\"chatItems\":[{\"chatInfo\":{\"type\":\"direct\",\"contact\":{\"localDisplayName\":\"AC2N\",\"contactId\":3}},\"chatItem\":{\"itemId\":17,\"meta\":{\"chatDir\":{\"type\":\"directRcv\"},\"itemText\":\"Alors tu reçois\"},\"content\":{\"type\":\"text\"}}}]}}"
+]
