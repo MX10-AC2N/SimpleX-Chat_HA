@@ -1,8 +1,14 @@
 # Tableau de bord "Intercom" plein écran pour une tablette murale / de salon.
 # Nécessite la carte custom:simplex-intercom-card (voir www/simplex-intercom-card/).
 #
-# Remplace "family" et "alice" par les alias configurés dans l'intégration
-# (Paramètres → Appareils et services → SimpleX Chat → Configurer).
+# Version dynamique : la liste des destinataires est lue dans l'intégration
+# (auto-découverte), donc aucune vue n'est à mettre à jour quand un nouveau
+# contact apparaît. Pour fixer une liste précise, décommente le bloc
+# "aliases" ci-dessous — il est prioritaire sur la découverte.
+#
+# Copie la carte dans /config/www/simplex-intercom-card/ et déclare-la comme
+# ressource Lovelace (Paramètres → Tableaux de bord → Ressources) :
+#   /local/simplex-intercom-card/simplex-intercom-card.js  (JavaScript Module)
 
 title: Interphone SimpleX
 views:
@@ -12,8 +18,9 @@ views:
     type: panel
     cards:
       - type: custom:simplex-intercom-card
-        title: "Salon → Famille"
-        aliases:
-          - family
-          - alice
-        default_alias: family
+        title: "Salon"
+        # Destinataires fixes (optionnel) — sinon, découverte automatique :
+        # aliases:
+        #   - family
+        #   - alice
+        # default_alias: family

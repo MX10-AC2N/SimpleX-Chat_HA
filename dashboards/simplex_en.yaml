@@ -112,6 +112,13 @@ views:
               After running the action, check the response in
               *Developer tools → Actions* (`invite_link` field).
 
+          - type: markdown
+            content: |
+              ### Send a message
+              The bot's contacts and groups are **discovered automatically**: a
+              `notify.simplex_chat_<alias>` entity is created for each of them,
+              nothing to configure.
+
           - type: entities
             title: Shortcuts
             show_header_toggle: false
@@ -120,6 +127,34 @@ views:
                 name: Configure integration
                 url: /config/integrations/integration/simplex
                 icon: mdi:cog
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Contacts
+            heading_style: title
+            icon: mdi:account-multiple
+
+          - type: markdown
+            content: |
+              The aliases below are the chats known to the integration. Use them
+              in `simplex.send_message`:
+
+              ```
+              action: simplex.send_message
+              data:
+                alias: alice
+                message: Hello !
+              ```
+
+          - type: entities
+            title: Notify entities (one per contact)
+            show_header_toggle: false
+            entities:
+              - type: custom:auto-entities
+                filter:
+                  - domain: notify
+                    integration: simplex
 
       - type: grid
         cards:
@@ -136,8 +171,12 @@ views:
               3. Or paste a phone invite into *Configure* → Add contact
 
               **Services:** `simplex.create_invite`, `simplex.accept_invite`,
-              `simplex.send_message`, `simplex.list_contacts`
+              `simplex.send_message`, `simplex.send_file`,
+              `simplex.list_contacts`, `simplex.list_groups`,
+              `simplex.refresh_contacts`, `simplex.mark_read`
 
-              **Event:** `simplex_message_received`
+              **Events:** `simplex_message_received` (incoming message),
+              `simplex_targets_updated` (contact/group discovered),
+              `simplex_error` (error reported by the CLI)
 
               📘 [Docs](https://github.com/MX10-AC2N/SimpleX-Chat_HA)

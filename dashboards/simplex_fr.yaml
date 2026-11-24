@@ -137,8 +137,9 @@ views:
           - type: markdown
             content: |
               ### Envoyer un message
-              Utilise une entité `notify.simplex_chat_<alias>` une fois les contacts ajoutés
-              (**Configurer** l’intégration → Ajouter un contact).
+              Les contacts et groupes du bot sont **découverts automatiquement** :
+              une entité `notify.simplex_chat_<alias>` est créée pour chacun
+              d’eux, sans rien configurer.
 
           - type: entities
             title: Raccourcis notify
@@ -148,6 +149,35 @@ views:
                 name: Configurer l’intégration
                 url: /config/integrations/integration/simplex
                 icon: mdi:cog
+
+      # ---------- Contacts (auto-découverte) ----------
+      - type: grid
+        cards:
+          - type: heading
+            heading: Contacts
+            heading_style: title
+            icon: mdi:account-multiple
+
+          - type: markdown
+            content: |
+              Les alias ci-dessous sont ceux des chats connus de l’intégration.
+              Utilise-les dans `simplex.send_message` :
+
+              ```
+              action: simplex.send_message
+              data:
+                alias: alice
+                message: Bonjour !
+              ```
+
+          - type: entities
+            title: Entités notify (un par contact)
+            show_header_toggle: false
+            entities:
+              - type: custom:auto-entities
+                filter:
+                  - domain: notify
+                    integration: simplex
 
       # ---------- Aide ----------
       - type: grid
@@ -168,9 +198,15 @@ views:
               - `simplex.create_invite`
               - `simplex.accept_invite`
               - `simplex.send_message`
+              - `simplex.send_file`
               - `simplex.list_contacts`
+              - `simplex.list_groups`
+              - `simplex.refresh_contacts`
+              - `simplex.mark_read`
 
-              **Événement entrant**
-              `simplex_message_received` — utilisable dans les automations.
+              **Événements**
+              - `simplex_message_received` — message entrant
+              - `simplex_targets_updated` — contact/groupe découvert
+              - `simplex_error` — erreur renvoyée par le CLI
 
               📘 Documentation : [SimpleX-Chat_HA](https://github.com/MX10-AC2N/SimpleX-Chat_HA)

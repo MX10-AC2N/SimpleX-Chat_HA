@@ -1,0 +1,46 @@
+# SimpleX Chat — écran d'accueil dynamique (FR)
+# -----------------------------------------------------------------------
+# Ce tableau de bord fonctionne SANS configuration de contacts : il se
+# base sur l'auto-découverte de l'intégration (les contacts et groupes
+# du bot SimpleX sont détectés automatiquement).
+#
+# Deux vues seulement :
+#   1. simplex-home  → la liste des conversations (remplie dynamiquement)
+#   2. simplex-chat  → UNE vue générique qui affiche la conversation
+#                       choisie dans la liste
+#
+# Comment ça marche : la carte « conversations » navigue vers
+# /simplex-chat#<alias> ; le fragment (#) porte l'alias, donc il survit
+# au rechargement de la page. La carte de discussion lit ce fragment.
+# → Plus aucune vue à déclarer par contact !
+#
+# Prérequis : copier les deux cartes dans /config/www/ et les déclarer
+# comme ressources Lovelace (Paramètres → Tableaux de bord → Ressources) :
+#   /local/simplex-conversations-card/simplex-conversations-card.js
+#   /local/simplex-chat-card/simplex-chat-card.js
+# (Type : JavaScript Module)
+
+title: SimpleX
+views:
+  - title: Conversations
+    path: simplex-home
+    icon: mdi:message-lock
+    type: panel
+    cards:
+      - type: custom:simplex-conversations-card
+        title: SimpleX
+        # Préfixe de navigation : doit correspondre au "path:" de la vue
+        # ci-dessous. L'alias est ajouté après le "#".
+        navigate_prefix: /simplex-chat
+        navigate_mode: hash
+
+  - title: Conversation
+    path: simplex-chat
+    icon: mdi:chat
+    type: panel
+    cards:
+      - type: custom:simplex-chat-card
+        # "auto" → l'alias est lu dans l'URL (#alias). Une seule vue
+        # suffit pour tous les contacts.
+        alias: auto
+        history_limit: 50
