@@ -20,6 +20,12 @@
  *     - alice
  *     - family
  *   default_alias: family
+ *
+ * The alias list can also be left out: the card then reads the chats known
+ * to the integration (auto-discovery) through the "simplex/contacts"
+ * websocket command, and the recipient picker lists them all:
+ *   type: custom:simplex-intercom-card
+ *   title: Salon
  * -----------------------------------------------------------------------
  */
 
@@ -42,25 +48,54 @@ class SimplexIntercomCard extends HTMLElement {
   }
 
   setConfig(config) {
-    if (!config.aliases || !Array.isArray(config.aliases) || config.aliases.length === 0) {
-      throw new Error("simplex-intercom-card: 'aliases' (list) is required in the card config");
-    }
+    const aliases = Array.isArray(config.aliases) ? config.aliases : null;
     this._config = {
       title: config.title || "SimpleX Intercom",
-      aliases: config.aliases,
-      default_alias: config.default_alias || config.aliases[0],
+      aliases: aliases,
+      default_alias: config.default_alias || (aliases && aliases[0]) || null,
       entry_id: config.entry_id || null,
+      connection_entity:
+        config.connection_entity || "binary_sensor.simplex_chat_connection",
     };
     this._selectedAlias = this._config.default_alias;
     this._render();
   }
 
   set hass(hass) {
+    const first = this._hass === null;
     this._hass = hass;
+    if (first) {
+      this._loadRecipients();
+    }
   }
 
   getCardSize() {
     return 4;
+  }
+
+  // ------------------------------------------------------------------
+  // Recipients
+  // ------------------------------------------------------------------
+
+  async _loadRecipients() {
+    // Explicit list wins; otherwise ask the integration for the chats it
+    // knows (auto-discovery).
+    if (this._config.aliases && this._config.aliases.length) return;
+    try {
+      const result = await this._hass.connection.sendMessagePromise({
+        type: "simplex/contacts",
+        ...(this._config.entry_id ? { entry_id: this._config.entry_id } : {}),
+      });
+      const targets = result.targets || {};
+      const aliases = Object.keys(targets);
+      if (!aliases.length) return;
+      this._config.aliases = aliases;
+      this._selectedAlias = this._config.default_alias || aliases[0];
+      this._render();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("simplex-intercom-card: could not load the recipient list", err);
+    }
   }
 
   // ------------------------------------------------------------------
@@ -119,7 +154,7 @@ class SimplexIntercomCard extends HTMLElement {
       </style>
       <ha-card>
         <div class="header">${this._escape(this._config.title)}</div>
-        ${this._config.aliases.length > 1
+        ${this._config.aliases && this._config.aliases.length > 1
           ? `<div class="alias-row">
                <select id="alias-select">
                  ${this._config.aliases
@@ -186,6 +221,10 @@ class SimplexIntercomCard extends HTMLElement {
     const input = this.shadowRoot.getElementById("text-input");
     const message = (input.value || "").trim();
     if (!message) return;
+    if (!this._selectedAlias) {
+      this._setStatus("Aucun destinataire connu.", "error");
+      return;
+    }
     this._setStatus("Envoi…", "busy");
     try {
       await this._hass.callService("simplex", "send_message", {
@@ -297,6 +336,10 @@ class SimplexIntercomCard extends HTMLElement {
   }
 
   async _upload(blob, kind) {
+    if (!this._selectedAlias) {
+      this._setStatus("Aucun destinataire connu.", "error");
+      return;
+    }
     this._setStatus("Envoi en cours…", "busy");
     const form = new FormData();
     form.append("alias", this._selectedAlias);
