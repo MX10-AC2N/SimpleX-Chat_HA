@@ -139,6 +139,7 @@ class SimplexLastMessageSensor(_RegistrySensor):
                 "alias": event.data.get("alias"),
                 "chat_ref": event.data.get("chat_ref"),
                 "display_name": event.data.get("display_name"),
+                "sender": event.data.get("sender"),
                 "type": event.data.get("type"),
                 "item_id": event.data.get("item_id"),
                 "timestamp": event.data.get("timestamp"),
@@ -341,6 +342,7 @@ class SimplexContactLastMessageSensor(_RegistrySensor):
             self._attr_extra_state_attributes = {
                 "alias": event.data.get("alias"),
                 "display_name": event.data.get("display_name"),
+                "sender": event.data.get("sender"),
                 "direction": event.data.get("direction"),
                 "status": event.data.get("status"),
                 "item_id": event.data.get("item_id"),

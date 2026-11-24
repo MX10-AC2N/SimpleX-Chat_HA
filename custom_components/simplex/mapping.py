@@ -247,11 +247,11 @@ def normalize_chat_item(
     # chats are covered too. Unreadable shapes fall back to "incoming"
     # (same as the old behaviour) rather than guessing wrong.
     chat_dir = meta.get("chatDir") if isinstance(meta.get("chatDir"), dict) else None
+    if chat_dir is None and isinstance(chat_item.get("chatDir"), dict):
+        # Documented ChatItem shape places chatDir one level above meta.
+        chat_dir = chat_item["chatDir"]
     if chat_dir is not None:
         dir_type = chat_dir.get("type")
-    elif isinstance(chat_item.get("chatDir"), dict):
-        # Documented ChatItem shape places chatDir one level above meta.
-        dir_type = chat_item["chatDir"].get("type")
     else:
         direction_meta = meta.get("direction")
         dir_type = (
@@ -260,6 +260,19 @@ def normalize_chat_item(
             else direction_meta
         )
     direction = "outgoing" if str(dir_type or "").lower().endswith("snd") else "incoming"
+
+    # Sender: in a group, the member who wrote (CIDirection GroupRcv carries
+    # the GroupMember); in a direct chat, the contact itself.
+    sender = None
+    if direction == "incoming":
+        if chat_type == "group":
+            member = (chat_dir or {}).get("groupMember")
+            if isinstance(member, dict):
+                sender = member.get("localDisplayName") or (
+                    member.get("memberProfile") or {}
+                ).get("displayName")
+        else:
+            sender = display_name
 
     # Best-effort read/delivered status for outgoing bubbles (✓ / ✓✓ in the
     # card). The CLI v7 CIStatus enum is sndNew | sndSent | sndRcvd |
@@ -284,6 +297,7 @@ def normalize_chat_item(
         "chat_ref": chat_ref,
         "display_name": display_name,
         "type": chat_type,
+        "sender": sender,
         "text": text,
         "file": file_info,
         "direction": direction,
