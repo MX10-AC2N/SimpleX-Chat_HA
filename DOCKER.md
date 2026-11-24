@@ -51,7 +51,7 @@ services:
       SIMPLEX_AUTO_ACCEPT: "true"
       SIMPLEX_FILES_ENABLED: "true"
       SIMPLEX_FILES_DIR: "/data/received_files"
-      SIMPLEX_MARK_READ: "true"
+      SIMPLEX_MARK_READ: "false"   # voir la section "Messages lus / non lus"
       SIMPLEX_TOR: "false"
       SIMPLEX_STARTUP_TIMEOUT: "30"
       PUID: "99"
@@ -99,6 +99,17 @@ Pour les dossiers dans les options de l'intégration :
 - Dossier de réception : `/config/simplex_inbox/received_files`
 
 Le dossier de réception est monté en lecture seule dans Home Assistant. Le bridge écrit les fichiers reçus dans le volume `simplex-inbox` via `SIMPLEX_FILES_DIR`.
+
+## Messages lus / non lus
+
+`SIMPLEX_MARK_READ` contrôle qui marque les messages comme lus.
+
+| Valeur | Effet |
+|---|---|
+| `false` (recommandé) | Le CLI ne marque rien. Les compteurs de non-lus de l'intégration (`sensor.simplex_chat_unread_messages`, `sensor.<contact>_unread_messages`) et les badges de la carte *conversations* fonctionnent. C'est l'intégration (la carte de discussion, son bouton « marquer comme lu ») qui gère l'état lu/non-lu. |
+| `true` | Le CLI ajoute l'option `-r` et marque **chaque** message reçu comme lu, immédiatement. Les compteurs de non-lus restent alors bloqués à 0 et les badges n'apparaissent jamais. Choisis cette valeur seulement si un autre client (la tablette, ton téléphone) consomme les messages et que tu ne veux pas les voir arriver comme « non lus » dans SimpleX Chat. |
+
+Le compose de référence utilise `SIMPLEX_MARK_READ: "false"`.
 
 ## Auto-découverte des contacts et des groupes
 

@@ -92,6 +92,10 @@ Renommer un contact / groupe**.
 
 > L'auto-découverte suppose que le bridge accepte automatiquement les
 > demandes de contact (`SIMPLEX_AUTO_ACCEPT=true`). Voir [DOCKER.md](DOCKER.md).
+>
+> Les badges de non-lus nécessitent également `SIMPLEX_MARK_READ=false` côté
+> bridge : avec `true`, le CLI marque chaque message comme lu à sa réception
+> et les compteurs restent à zéro. Voir [DOCKER.md](DOCKER.md).
 
 ### Manuel
 
@@ -217,6 +221,7 @@ automation:
 | `alias`        | Alias du chat (configuré ou dérivé)               |
 | `chat_ref`     | `@123` ou `#456`                                  |
 | `display_name` | Nom d'affichage du contact / groupe               |
+| `sender` | Qui a écrit (membres d'un groupe)              |
 | `type`         | `contact` ou `group`                              |
 | `text`         | Corps du message                                  |
 | `direction`    | `incoming` / `outgoing`                           |
@@ -264,6 +269,69 @@ Les entités vivent sur deux types d'appareils :
 L'outil `send_simplex_message` est enregistré automatiquement. Exemple :
 
 > « Envoie un message SimpleX à Alice : je serai là dans 10 minutes »
+
+---
+
+## Tableaux de bord & cartes
+
+Six tableaux de bord prêts à l'emploi sont fournis dans [`dashboards/`](dashboards).
+Choisis celui qui correspond à ta configuration :
+
+| Fichier | Style | Cartes custom nécessaires ? |
+|---------|-------|----------------------------|
+| `simplex_fr.yaml` / `simplex_en.yaml` | Statut, actions, liste des contacts | Non (entités HA natives) |
+| `simplex_mushroom_fr.yaml` / `_en.yaml` | Idem, style Mushroom | Non |
+| `simplex_tablet_fr.yaml` | Tablette murale (interphone) | Oui (carte intercom) |
+| `simplex_auto_fr.yaml` / `simplex_auto_en.yaml` | **Fauton appli** : liste + discussion | Oui |
+| `simplex_android_home_fr.yaml` | Fauton appli, une vue générique | Oui |
+| `simplex_android_look_fr.yaml` | Fil de discussion seul | Oui |
+
+### Installer les cartes custom
+
+Les tableaux de bord « façon appli » ont besoin de deux cartes Lovelace.
+Copie-les dans `/config/www/` et déclare-les dans *Paramètres → Tableaux de
+bord → Ressources* :
+
+```
+/config/www/simplex-conversations-card/simplex-conversations-card.js
+/config/www/simplex-chat-card/simplex-chat-card.js
+```
+
+Les deux en **JavaScript Module**. Le tableau de bord tablette a aussi besoin
+de `/config/www/simplex-intercom-card/simplex-intercom-card.js`.
+
+### Le mode dynamique — une seule vue pour tous les contacts
+
+La liste des conversations est remplie par l'auto-découverte : déclarer une
+vue par contact n'aurait donc aucun sens. La carte de discussion accepte un
+alias `auto` : elle lit l'alias dans l'URL.
+
+```yaml
+- type: custom:simplex-conversations-card
+  navigate_prefix: /simplex-chat
+  navigate_mode: hash        # par défaut
+- type: custom:simplex-chat-card
+  alias: auto
+```
+
+Un clic sur une ligne navigue vers `/simplex-chat#alice`. Le fragment (`#`)
+porte l'alias et survit au rechargement de la page : une seule vue générique
+sert à tous les contacts. `navigate_mode: path` (`/simplex-chat/alice`) est
+disponible si tu préfères un chemin par contact.
+
+Un `alias:` explicite continue de fonctionner exactement comme avant : le
+mode dynamique est opt-in, carte par carte.
+
+### Ce que les cartes apportent
+
+**Liste des conversations** — champ de recherche, couleurs d'avatar
+déterministes, mise en évidence et badge des non-lus, pastille de connexion,
+horodatages relatifs, icônes de groupe, compteur de messages non lus.
+Rafraîchissement sur nouveau message et sur découverte de contact.
+
+**Vue de discussion** — séparateurs de jour, nom de l'expéditeur dans les
+groupes, état de connexion dans l'en-tête, bouton « marquer comme lu »,
+enregistrement vocal/vidéo, et défilement infini vers l'historique.
 
 ---
 

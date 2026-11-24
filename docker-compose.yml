@@ -26,7 +26,13 @@ services:
       SIMPLEX_AUTO_ACCEPT: "true"
       SIMPLEX_FILES_ENABLED: "true"
       SIMPLEX_FILES_DIR: "/data/received_files"
-      SIMPLEX_MARK_READ: "true"
+      # false = le CLI ne marque PAS les messages comme lus tout seul.
+      # À true, le CLI marque chaque message reçu comme lu (option -r) :
+      # les compteurs de non-lus de l'intégration et de la carte
+      # "conversations" resteraient alors toujours à 0.
+      # Passer à true si tu veux que la tablette consomme les messages
+      # sans les marquer de ton côté.
+      SIMPLEX_MARK_READ: "false"
       SIMPLEX_TOR: "false"
       SIMPLEX_STARTUP_TIMEOUT: "30"
       PUID: "99"
