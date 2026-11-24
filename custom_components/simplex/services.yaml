@@ -1,12 +1,19 @@
 send_message:
   name: Send message
-  description: Send a text message to a configured SimpleX alias (contact or group).
+  description: Send a text message to a SimpleX contact or group, either by alias or by chat reference.
   fields:
     alias:
       name: Alias
-      description: The friendly name of the contact/group as configured in the integration.
-      required: true
+      description: The friendly name of the contact/group (configured manually or auto-discovered).
+      required: false
       example: "alice"
+      selector:
+        text:
+    chat_ref:
+      name: Chat reference
+      description: Raw SimpleX chat reference — "@<contactId>" for a contact, "#<groupId>" for a group. Used when no alias is given.
+      required: false
+      example: "@3"
       selector:
         text:
     message:
@@ -23,16 +30,29 @@ send_message:
       example: "Home Alert"
       selector:
         text:
+    entry_id:
+      name: Config entry ID
+      description: Optional. Required only if you have multiple SimpleX integrations.
+      required: false
+      selector:
+        text:
 
 send_file:
   name: Send file
-  description: Send a local file (audio clip, video clip, image…) to a configured SimpleX alias. The file must be readable by the simplex-chat CLI process (shared volume if it runs in another container).
+  description: Send a local file (audio clip, video clip, image…) to a SimpleX contact or group. The file must be readable by the simplex-chat CLI process (shared volume if it runs in another container).
   fields:
     alias:
       name: Alias
-      description: The friendly name of the contact/group as configured in the integration.
-      required: true
+      description: The friendly name of the contact/group (configured manually or auto-discovered).
+      required: false
       example: "alice"
+      selector:
+        text:
+    chat_ref:
+      name: Chat reference
+      description: Raw SimpleX chat reference — "@<contactId>" or "#<groupId>". Used when no alias is given.
+      required: false
+      example: "@3"
       selector:
         text:
     file_path:
@@ -40,6 +60,12 @@ send_file:
       description: Absolute path to the file to send, as seen by Home Assistant.
       required: true
       example: "/config/simplex_outbox/clip_20261114.ogg"
+      selector:
+        text:
+    entry_id:
+      name: Config entry ID
+      description: Optional. Required only if you have multiple SimpleX integrations.
+      required: false
       selector:
         text:
 
@@ -81,6 +107,60 @@ list_contacts:
   name: List contacts
   description: Retrieve the list of contacts known by the SimpleX CLI.
   fields:
+    entry_id:
+      name: Config entry ID
+      description: Optional. Required only if you have multiple SimpleX integrations.
+      required: false
+      selector:
+        text:
+
+list_groups:
+  name: List groups
+  description: Retrieve the list of groups known by the SimpleX CLI.
+  fields:
+    entry_id:
+      name: Config entry ID
+      description: Optional. Required only if you have multiple SimpleX integrations.
+      required: false
+      selector:
+        text:
+
+refresh_contacts:
+  name: Refresh contacts
+  description: Re-run the auto-discovery of contacts and groups, and return the resulting list of known chats.
+  fields:
+    entry_id:
+      name: Config entry ID
+      description: Optional. Required only if you have multiple SimpleX integrations.
+      required: false
+      selector:
+        text:
+
+mark_read:
+  name: Mark as read
+  description: Mark specific chat items as read on the SimpleX side.
+  fields:
+    alias:
+      name: Alias
+      description: The friendly name of the contact/group.
+      required: false
+      example: "alice"
+      selector:
+        text:
+    chat_ref:
+      name: Chat reference
+      description: Raw SimpleX chat reference — "@<contactId>" or "#<groupId>". Used when no alias is given.
+      required: false
+      example: "@3"
+      selector:
+        text:
+    item_ids:
+      name: Item IDs
+      description: List of chat item ids to mark as read.
+      required: true
+      example: "17,18"
+      selector:
+        object:
     entry_id:
       name: Config entry ID
       description: Optional. Required only if you have multiple SimpleX integrations.

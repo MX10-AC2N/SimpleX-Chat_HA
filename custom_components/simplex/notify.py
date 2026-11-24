@@ -1,19 +1,25 @@
-"""Notify platform for SimpleX Chat."""
+"""Notify platform for SimpleX Chat.
+
+One notify entity per known chat (contact or group), whether it was
+configured by hand or auto-discovered — which is what makes the
+`notify.simplex_*` services usable right after the integration is set up,
+without pasting a one-time invitation link for every contact.
+"""
 
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any
 
 from homeassistant.components.notify import NotifyEntity, NotifyEntityFeature
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import CONF_TARGETS, DOMAIN
+from .const import DOMAIN, EVENT_TARGETS_UPDATED
+from .entity_base import main_device_info
+from .targets import SimplexTarget, registry_for
 from .websocket_client import SimplexWsClient, SimplexWsError
 
 _LOGGER = logging.getLogger(__name__)
@@ -24,24 +30,55 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up SimpleX notify entities."""
-    targets: dict[str, Any] = config_entry.options.get(CONF_TARGETS, {})
+    """Set up the SimpleX notify entities."""
+    registry = registry_for(hass, config_entry.entry_id)
     entities: list[SimplexNotifyEntity] = []
+    created: set[str] = set()
 
-    for alias_id, alias_data in targets.items():
-        name = alias_data.get("name", alias_id)
+    def _add_target(target: SimplexTarget) -> None:
+        # One entity per chat: never create a second one for a chat that is
+        # already covered (a contact can be auto-discovered *and* later be
+        # configured by hand).
+        if target.chat_ref in created:
+            return
+        created.add(target.chat_ref)
         entities.append(
-            SimplexNotifyEntity(hass, config_entry, alias_id, name)
+            SimplexNotifyEntity(hass, config_entry, target.chat_ref, target.alias, target.name)
         )
 
-    if not targets:
-        # Fallback entity that can later be used once targets are added
+    if registry is not None:
+        for target in registry.targets:
+            _add_target(target)
+
+    if not entities:
+        # Fallback entity that can later be used once chats are known.
         entities.append(
-            SimplexNotifyEntity(hass, config_entry, None, "SimpleX")
+            SimplexNotifyEntity(hass, config_entry, None, None, "SimpleX")
         )
 
-    if entities:
-        async_add_entities(entities)
+    async_add_entities(entities)
+
+    @callback
+    def _handle_targets_updated(event) -> None:
+        if event.data.get("entry_id") != config_entry.entry_id:
+            return
+        current = registry_for(hass, config_entry.entry_id)
+        if current is None:
+            return
+        new_entities: list[SimplexNotifyEntity] = []
+        for target in current.targets:
+            if target.chat_ref in created:
+                continue
+            created.add(target.chat_ref)
+            new_entities.append(
+                SimplexNotifyEntity(
+                    hass, config_entry, target.chat_ref, target.alias, target.name
+                )
+            )
+        if new_entities:
+            async_add_entities(new_entities)
+
+    hass.bus.async_listen(EVENT_TARGETS_UPDATED, _handle_targets_updated)
 
 
 class SimplexNotifyEntity(NotifyEntity):
@@ -55,35 +92,32 @@ class SimplexNotifyEntity(NotifyEntity):
         self,
         hass: HomeAssistant,
         config_entry: ConfigEntry,
-        alias_id: str | None,
+        chat_ref: str | None,
+        alias: str | None,
         alias_name: str,
     ) -> None:
         self.hass = hass
         self.config_entry = config_entry
-        self.alias_id = alias_id
+        self.chat_ref = chat_ref
+        self.alias = alias
         self.alias_name = alias_name
 
-        if alias_id:
-            clean = re.sub(r"[^a-z0-9_]", "", alias_name.lower().replace(" ", "_"))
-            clean = clean.strip("_") or f"alias_{alias_id}"
+        if chat_ref:
             self._attr_name = alias_name
-            self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}_{alias_id}"
+            self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}_{alias}"
         else:
             self._attr_name = "Broadcast"
             self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}"
 
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, config_entry.entry_id)},
-            name="SimpleX Chat",
-            manufacturer="SimpleX Chat",
-            model="Home Assistant Integration",
-            entry_type=DeviceEntryType.SERVICE,
-            configuration_url="https://simplex.chat",
-        )
+        self._attr_device_info = main_device_info(config_entry)
 
     def _client(self) -> SimplexWsClient | None:
         data = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
         return data.get("client") if data else None
+
+    def _targets(self) -> dict[str, dict[str, Any]]:
+        data = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
+        return (data or {}).get("targets", {})
 
     @property
     def available(self) -> bool:
@@ -108,17 +142,11 @@ class SimplexNotifyEntity(NotifyEntity):
             raise HomeAssistantError("SimpleX WebSocket client not available")
 
         full = f"{title}: {message}" if title else message
-        targets = self.config_entry.options.get(CONF_TARGETS, {})
+        targets = self._targets()
 
-        if self.alias_id:
-            data = targets.get(self.alias_id, {})
-            chat_ref = data.get("chat_ref")
-            if not chat_ref:
-                raise HomeAssistantError(
-                    f"No chat_ref configured for '{self.alias_name}'"
-                )
+        if self.chat_ref:
             try:
-                await client.send_text(chat_ref, full)
+                await client.send_text(self.chat_ref, full)
             except SimplexWsError as err:
                 raise HomeAssistantError(
                     f"Failed to send to {self.alias_name}: {err}"

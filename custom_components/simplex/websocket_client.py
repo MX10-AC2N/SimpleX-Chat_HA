@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import secrets
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -58,7 +59,9 @@ class SimplexWsClient:
         self._closing = False
         self._listeners: list[Callable[[bool], None]] = []
         self._event_handlers: list[Callable[[dict[str, Any]], None]] = []
+        self._error_listeners: list[Callable[[dict[str, Any]], None]] = []
         self._user_id: int | None = None  # cached active user id
+        self._last_error: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------
     # Connection state
@@ -87,6 +90,40 @@ class SimplexWsClient:
                 self._event_handlers.remove(handler)
 
         return _remove
+
+    def add_error_listener(self, listener: Callable[[dict[str, Any]], None]) -> Callable[[], None]:
+        """Register a callback invoked when the CLI answers with a chatCmdError."""
+        self._error_listeners.append(listener)
+
+        def _remove() -> None:
+            if listener in self._error_listeners:
+                self._error_listeners.remove(listener)
+
+        return _remove
+
+    @property
+    def last_error(self) -> dict[str, Any] | None:
+        """The last CLI error (chatCmdError), or None if none happened yet."""
+        return dict(self._last_error) if self._last_error else None
+
+    def clear_error(self) -> None:
+        """Forget the last error (e.g. after a successful command)."""
+        self._last_error = None
+
+    def _record_error(self, resp: dict[str, Any], cmd: str) -> None:
+        """Remember the last chatCmdError and notify the error listeners."""
+        error = self._convert_chat_cmd_error(resp)
+        self._last_error = {
+            "message": error.message,
+            "reason": error.reason,
+            "command": self._redact_cmd(cmd),
+            "timestamp": time.time(),
+        }
+        for listener in list(self._error_listeners):
+            try:
+                listener(dict(self._last_error))
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Error listener failed")
 
     def _notify_listeners(self) -> None:
         state = self.connected
@@ -253,6 +290,7 @@ class SimplexWsClient:
         if not isinstance(resp, dict):
             return result
         if resp.get("type") == "chatCmdError":
+            self._record_error(resp, cmd)
             raise self._convert_chat_cmd_error(resp)
         return resp
 
@@ -541,7 +579,19 @@ class SimplexWsClient:
             return await self._rpc_cmd(f'/f {chat_ref} "{safe_path}"', timeout=timeout)
 
     async def list_contacts(self, timeout: float = 15.0) -> list[dict[str, Any]]:
-        """Return the list of contacts for the active user."""
+        """Return the list of contacts for the active user.
+
+        Official Bot API (v7.1) — `APIListContacts`:
+
+            /_contacts <userId>
+
+        Response `ContactsList`:
+
+            {"type": "contactsList", "user": {...}, "contacts": [Contact]}
+
+        The legacy CLI command `/contacts` is kept as a fallback for older
+        CLIs that do not implement the `/_` API.
+        """
         user_id = await self._get_user_id()
         try:
             resp = await self._rpc_cmd(f"/_contacts {user_id}", timeout=timeout)
@@ -550,6 +600,47 @@ class SimplexWsClient:
             resp = await self._rpc_cmd("/contacts", timeout=timeout)
         contacts = resp.get("contacts") or []
         return contacts if isinstance(contacts, list) else []
+
+    async def list_groups(self, timeout: float = 15.0) -> list[dict[str, Any]]:
+        """Return the list of groups for the active user.
+
+        Official Bot API (v7.1) — `APIListGroups`:
+
+            /_groups <userId>[@<contactId_>][ <search>]
+
+        Response `GroupsList`:
+
+            {"type": "groupsList", "user": {...}, "groups": [GroupInfo]}
+
+        The legacy CLI command `/groups` is kept as a fallback for older
+        CLIs that do not implement the `/_` API.
+        """
+        user_id = await self._get_user_id()
+        try:
+            resp = await self._rpc_cmd(f"/_groups {user_id}", timeout=timeout)
+        except SimplexWsError as err:
+            _LOGGER.debug("list_groups: /_groups failed (%s), trying legacy /groups", err)
+            resp = await self._rpc_cmd("/groups", timeout=timeout)
+        groups = resp.get("groups") or []
+        return groups if isinstance(groups, list) else []
+
+    async def mark_chat_read(
+        self, chat_ref: str, item_ids: list[int], timeout: float = 15.0
+    ) -> dict[str, Any]:
+        """Mark chat items as read.
+
+        Official Bot API (v7.1) — `APIChatItemsRead`:
+
+            /_read chat items <chatRef> <itemId>[,<itemId>...]
+
+        Response `ItemsReadForChat`:
+
+            {"type": "itemsReadForChat", "user": {...}, "chatInfo": {...}}
+        """
+        if not item_ids:
+            return {}
+        ids = ",".join(str(int(item_id)) for item_id in item_ids)
+        return await self._rpc_cmd(f"/_read chat items {chat_ref} {ids}", timeout=timeout)
 
     async def get_chats(self, timeout: float = 20.0) -> list[dict[str, Any]]:
         """Return chat previews (one per contact/group) with their recent items.

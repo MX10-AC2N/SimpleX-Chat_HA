@@ -8,7 +8,7 @@ from typing import Any
 
 import aiohttp
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
@@ -16,26 +16,34 @@ import voluptuous as vol
 
 from .const import (
     CONF_AUTO_ACCEPT_FILES,
+    CONF_AUTO_DISCOVER,
     CONF_INBOX_DIR,
     CONF_OUTBOX_DIR,
     CONF_TARGETS,
     CONF_WS_URL,
     DEFAULT_AUTO_ACCEPT_FILES,
+    DEFAULT_AUTO_DISCOVER,
     DEFAULT_INBOX_DIR,
     DEFAULT_OUTBOX_DIR,
     DEFAULT_WS_URL,
     DOMAIN,
+    EVENT_ERROR,
     EVENT_MESSAGE_RECEIVED,
-    MEDIA_URL_PATH,
+    EVENT_TARGETS_UPDATED,
     PLATFORMS,
     SERVICE_ACCEPT_INVITE,
     SERVICE_CREATE_INVITE,
     SERVICE_LIST_CONTACTS,
+    SERVICE_LIST_GROUPS,
+    SERVICE_MARK_READ,
+    SERVICE_REFRESH_CONTACTS,
     SERVICE_SEND_FILE,
     SERVICE_SEND_MESSAGE,
 )
 from .http import SimplexMediaView, SimplexUploadView
 from .llm_api import register_llm_api
+from .mapping import normalize_chat_item, pending_incoming_file_id
+from .targets import SimplexTargetRegistry
 from .websocket_client import SimplexWsClient, SimplexWsError
 from . import ws_api
 
@@ -70,14 +78,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     outbox_dir: str = entry.options.get(CONF_OUTBOX_DIR, DEFAULT_OUTBOX_DIR)
     inbox_dir: str = entry.options.get(CONF_INBOX_DIR, DEFAULT_INBOX_DIR)
     auto_accept_files: bool = entry.options.get(CONF_AUTO_ACCEPT_FILES, DEFAULT_AUTO_ACCEPT_FILES)
+    auto_discover: bool = entry.options.get(CONF_AUTO_DISCOVER, DEFAULT_AUTO_DISCOVER)
+
+    # The device used to be named "SimpleX Chat", which slugifies to
+    # `simple_x_chat_*`, while the README and the shipped dashboards have
+    # always documented `simplex_chat_*`. Every dashboard card therefore
+    # showed "entity not found". The device is now named "Simplex Chat";
+    # Home Assistant does not rename entity ids when a device is renamed,
+    # so existing installs are migrated here, once.
+    _migrate_entity_ids(hass, entry)
 
     _LOGGER.info(
-        "Setting up SimpleX entry %s (ws=%s, %d target(s), outbox=%s, inbox=%s)",
+        "Setting up SimpleX entry %s (ws=%s, %d configured target(s), "
+        "outbox=%s, inbox=%s, auto_discover=%s)",
         entry.entry_id,
         ws_url,
         len(targets),
         outbox_dir,
         inbox_dir,
+        auto_discover,
     )
 
     # The outbox directory must exist so the HTTP upload view can write into
@@ -107,15 +126,37 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception as exc:  # noqa: BLE001
         _LOGGER.warning("Could not ensure bot profile: %s", exc)
 
-    # Store runtime data
+    # Store runtime data. `targets` holds the *merged* view of the manually
+    # configured targets and the auto-discovered ones; it is refreshed every
+    # time the registry changes so every consumer (notify entities,
+    # sensors, the LLM tool, the websocket API) always sees the same list.
+    registry = SimplexTargetRegistry(targets)
     hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = {
+    entry_data: dict[str, Any] = {
         "client": client,
-        "targets": targets,
+        "targets": registry.all(),
+        "registry": registry,
         "entry": entry,
         "outbox_dir": outbox_dir,
         "inbox_dir": inbox_dir,
     }
+    hass.data[DOMAIN][entry.entry_id] = entry_data
+
+    # ------------------------------------------------------------------
+    # Auto-discovery of the CLI's contacts and groups
+    # ------------------------------------------------------------------
+    # Without this, every chat had to be configured by hand with a one-time
+    # invitation link, which made incoming messages from unconfigured
+    # contacts invisible ("orphan" messages). It runs *before* the
+    # platforms are forwarded so the very first entity set already covers
+    # every known chat.
+    if auto_discover:
+        try:
+            await _refresh_targets(hass, entry, client, registry)
+        except SimplexWsError as exc:
+            _LOGGER.warning("SimpleX auto-discovery failed: %s", exc)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Unexpected error during SimpleX auto-discovery")
 
     # Forward platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -135,22 +176,50 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not isinstance(resp, dict):
             return
         etype = resp.get("type")
+
+        # Contact / group lifecycle: keep the registry in sync so a contact
+        # accepted while HA is running shows up without a restart.
+        if etype in CONTACT_EVENT_TYPES:
+            _handle_contact_event(hass, entry, registry, resp)
+            return
+
         if etype in ("newChatItems", "chatItemsCreated"):
             items = resp.get("chatItems") or resp.get("chatItem") or []
             if not isinstance(items, list):
                 items = [items]
             for item in items:
                 try:
-                    _fire_message_event(hass, entry.entry_id, item, targets, inbox_dir)
+                    _fire_message_event(
+                        hass,
+                        entry.entry_id,
+                        item,
+                        entry_data["targets"],
+                        inbox_dir,
+                        registry,
+                    )
                 except Exception:  # noqa: BLE001
                     _LOGGER.exception("Failed to process incoming chat item")
                 if auto_accept_files:
-                    file_id = _pending_incoming_file_id(item)
+                    file_id = pending_incoming_file_id(item)
                     if file_id is not None:
                         hass.async_create_task(_accept_file(client, file_id))
 
     remove_handler = client.add_event_handler(_on_ws_event)
     entry.async_on_unload(remove_handler)
+
+    # Surface CLI errors (chatCmdError) as HA events so they are visible in
+    # the logbook and can drive a dashboard card.
+    def _on_ws_error(error: dict[str, Any]) -> None:
+        _LOGGER.warning(
+            "SimpleX CLI error: %s (reason=%s, cmd=%s)",
+            error.get("message"),
+            error.get("reason"),
+            error.get("command"),
+        )
+        hass.bus.async_fire(EVENT_ERROR, {"entry_id": entry.entry_id, **error})
+
+    remove_error_handler = client.add_error_listener(_on_ws_error)
+    entry.async_on_unload(remove_error_handler)
 
     # Register domain services (idempotent, guarded)
     if not hass.services.has_service(DOMAIN, SERVICE_SEND_MESSAGE):
@@ -179,95 +248,65 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 # Helpers
 # ------------------------------------------------------------------
 
-# Items protocolaires générés automatiquement par le CLI v7 à l'établissement
-# d'une connexion (chatBanner, infos E2EE, annonces de features). Cartographiés
-# en direct par la suite ws-validate (CLI 7.1.4.0) : ils portent un itemText
-# non vide ("chat banner"), il faut donc les filtrer PAR TYPE et non par
-# absence de texte, sinon chaque connexion génère des bulles/event fantômes.
-SYSTEM_CONTENT_TYPES = frozenset(
-    {
-        "chatBanner",
-        "rcvDirectE2EEInfo",
-        "sndDirectE2EEInfo",
-        "rcvChatFeature",
-        "sndChatFeature",
-        "intro",
-        "autoReply",
-    }
-)
-
-# Types de contenu rendus comme une bulle dans la carte.
-RENDERABLE_CONTENT_TYPES = (
-    "text",
-    "sndMsgContent",
-    "rcvMsgContent",
-    "file",
-    "image",
-    "voice",
-    "video",
-)
+# The entity ids the integration used to generate, because the device was
+# named "SimpleX Chat" (slugified: `simple_x_chat`).
+_LEGACY_ENTITY_ID_MARKER = "simple_x_chat_"
 
 
-def _unwrap_chat_item(item: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Return (chat_info, chat_item) for both known serialisations.
+def legacy_entity_id_to_new(entity_id: str) -> str | None:
+    """Return the current id for a legacy entity id, or None if it is current.
 
-    CLI v6+/v7 (live events /_subscribe, /chats) wrap each item:
-        {"chatInfo": {...}, "chatItem": {"itemId", "meta", "content", ...}}
-    Legacy / flat forms (older CLIs, some RPC replies) hand the chatItem
-    directly. Reading `meta` off the wrapper silently yields an empty dict —
-    which is exactly the bug that made item_id/timestamp/edited always empty.
+    The integration device is named "Simplex Chat", so the entities now
+    live at `sensor.simplex_chat_last_message` & co. — the ids the README
+    and the shipped dashboards have always used. Installs created before
+    that rename still have the `*_simple_x_chat_*` ids.
     """
-    if not isinstance(item, dict):
-        return {}, {}
-    chat_info = item.get("chatInfo") or {}
-    chat_item = item.get("chatItem")
-    if isinstance(chat_item, dict):
-        return chat_info if isinstance(chat_info, dict) else {}, chat_item
-    return chat_info if isinstance(chat_info, dict) else {}, item
-
-
-def _msg_content(chat_item: dict[str, Any]) -> dict[str, Any]:
-    """Return the discriminated message content, whichever serialisation:
-    - v7 short form  : chatItem.content.{type,text,...}
-    - documented form: chatItem.content.msgContent.{type,text,fileName,...}
-    - flat form      : chatItem.msgContent
-    """
-    content = chat_item.get("content")
-    if isinstance(content, dict):
-        mc = content.get("msgContent")
-        if isinstance(mc, dict):
-            return mc
-        if "type" in content:
-            return content
-    mc = chat_item.get("msgContent")
-    return mc if isinstance(mc, dict) else {}
-
-
-def _pending_incoming_file_id(item: dict[str, Any]) -> int | None:
-    """Return the fileId of an incoming file that hasn't been accepted yet.
-
-    Best-effort: the exact `fileStatus.type` strings for "not yet accepted"
-    are not confirmed against every CLI version (see websocket_client.
-    receive_file docstring), so we accept on any status that isn't already
-    one of the clearly-terminal ones. Worst case this calls receive_file on
-    an already-accepted file, which the CLI just no-ops / errors on
-    harmlessly (logged at debug level, not raised to the user).
-
-    Handles the v7 wrapper (file metadata lives in chatItem.meta.itemFile)
-    as well as the legacy placements.
-    """
-    _, chat_item = _unwrap_chat_item(item)
-    meta = chat_item.get("meta") or {}
-    content = chat_item.get("content") or {}
-    file_status = meta.get("itemFile") or chat_item.get("file") or content.get("file")
-    if not isinstance(file_status, dict):
+    if _LEGACY_ENTITY_ID_MARKER not in entity_id:
         return None
-    status_type = (file_status.get("fileStatus") or {}).get("type") if isinstance(
-        file_status.get("fileStatus"), dict
-    ) else file_status.get("fileStatus")
-    if status_type in ("rcvComplete", "rcvCancelled", "sndComplete", "invalid"):
-        return None
-    return file_status.get("fileId")
+    return entity_id.replace(_LEGACY_ENTITY_ID_MARKER, "simplex_chat_")
+
+
+def _migrate_entity_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Rename the integration's entities to their documented ids.
+
+    Home Assistant derives an entity id from the *device* name, and does
+    not regenerate it when the device is renamed. This integration's
+    device is now named "Simplex Chat", so the entities live at
+    `sensor.simplex_chat_last_message` & co. — the ids the README and the
+    shipped dashboards have always used.
+
+    Existing installs registered the entities under the old
+    `*_simple_x_chat_*` ids; they are renamed here, once, so the
+    dashboards start working without any manual action.
+    """
+    try:
+        from homeassistant.helpers import entity_registry as er
+    except ImportError:  # pragma: no cover - Home Assistant always has it
+        return
+
+    registry = er.async_get(hass)
+    for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
+        old_id = reg_entry.entity_id
+        new_id = legacy_entity_id_to_new(old_id)
+        if new_id is None:
+            continue
+        domain = old_id.split(".", 1)[0]
+        if reg_entry.unique_id:
+            current_id = registry.async_get_entity_id(
+                domain, reg_entry.platform, reg_entry.unique_id
+            )
+            if current_id and current_id != old_id:
+                # Already migrated (or the id has been taken meanwhile):
+                # leave the entity alone.
+                continue
+        try:
+            registry.async_update_entity(old_id, new_entity_id=new_id)
+        except HomeAssistantError as err:
+            _LOGGER.warning(
+                "Could not rename entity %s to %s: %s", old_id, new_id, err
+            )
+        else:
+            _LOGGER.info("Renamed entity %s -> %s", old_id, new_id)
 
 
 async def _accept_file(client: SimplexWsClient, file_id: int) -> None:
@@ -277,177 +316,27 @@ async def _accept_file(client: SimplexWsClient, file_id: int) -> None:
         _LOGGER.debug("Auto-accept of incoming file %s failed/skipped: %s", file_id, err)
 
 
-def _resolve_media_url(file_info: dict[str, Any] | None, inbox_dir: str) -> str | None:
-    """Return a /api/simplex/media/<name> URL if the file is already on disk.
-
-    Returns None (no playable media yet) until the shared inbox volume
-    actually contains it — e.g. right after `receive_file()` was requested
-    but before the transfer completed.
-    """
-    if not file_info or not file_info.get("name"):
-        return None
-    path = Path(inbox_dir) / file_info["name"]
-    if not path.is_file():
-        return None
-    from urllib.parse import quote
-
-    return f"{MEDIA_URL_PATH}/{quote(file_info['name'])}"
-
-
-def normalize_chat_item(
-    item: dict[str, Any], targets: dict[str, Any], inbox_dir: str | None = None
-) -> dict[str, Any] | None:
-    """Turn one raw SimpleX chat item into a flat dict the frontend card understands.
-
-    Shared by the live event handler (`_fire_message_event`, below) and the
-    `simplex/history` websocket command (`ws_api.py`), so the "same message"
-    always looks the same whether it arrived live or was fetched from
-    `/chats` — the chat-card bubbles don't have to special-case either path.
-
-    Returns None for item kinds we don't render as a bubble (reactions,
-    deletions, system markers, …).
-
-    Serialisation proven against CLI 7.1.4.0 (ws-validate reference run):
-
-        resp.chatItems[] = {                      <- wrapper
-          "chatInfo": {"type": "direct",
-                       "contact": {"contactId": 3, "localDisplayName": "AC2N", ...}},
-          "chatItem": {"itemId": 17,
-                       "meta":  {"chatDir": {"type": "directRcv"},
-                                 "itemText": "Alors tu reçois", ...},
-                       "content": {"type": "text", "text": "Alors tu reçois", ...}}}
-
-    Both the v7 wrapper and legacy flat shapes are supported here, so this
-    keeps working with older CLIs and with whatever shape /chats returns.
-    """
-    chat_info, chat_item = _unwrap_chat_item(item)
-    if not chat_item:
-        return None
-
-    meta = chat_item.get("meta") if isinstance(chat_item.get("meta"), dict) else {}
-    msg_content = _msg_content(chat_item)
-    msg_type = msg_content.get("type")
-
-    # System/protocol items (chat banner, E2EE info, chat-feature notices):
-    # filtered by type, before anything else — they carry a non-empty
-    # itemText ("chat banner"), so a "not text and not file" test would NOT
-    # catch them.
-    if msg_type in SYSTEM_CONTENT_TYPES:
-        return None
-
-    if msg_type not in RENDERABLE_CONTENT_TYPES:
-        return None
-
-    # Display text: meta.itemText is the reliable CLI v7 field (present on
-    # text messages and on file/image captions alike); fall back to the
-    # older msgContent placements.
-    text = (
-        meta.get("itemText")
-        or msg_content.get("text")
-        or msg_content.get("fileName")
-        or ""
-    )
-
-    # File / voice / image / video attachments: surface what we can even
-    # without being able to stream the bytes (see DOCKER.md "received files"
-    # note). CLI v7 exposes the transfer metadata in meta.itemFile.
-    file_info = None
-    file_status = meta.get("itemFile") or chat_item.get("file") or msg_content.get("file")
-    if isinstance(file_status, dict) or msg_type in ("file", "image", "voice", "video"):
-        file_status = file_status if isinstance(file_status, dict) else {}
-        file_info = {
-            "file_id": file_status.get("fileId"),
-            "name": file_status.get("fileName") or msg_content.get("fileName"),
-            "size": file_status.get("fileSize"),
-            "kind": (
-                "image"
-                if msg_type == "image"
-                else "voice"
-                if msg_type == "voice"
-                else "file"  # video maps to "file" so the card needs no change
-            ),
-        }
-        if inbox_dir:
-            file_info["media_url"] = _resolve_media_url(file_info, inbox_dir)
-
-    if not text and not file_info:
-        return None
-
-    contact = chat_info.get("contact") or {}
-    group = chat_info.get("groupInfo") or {}
-    chat_ref = None
-    alias = None
-
-    if contact:
-        cid = contact.get("contactId")
-        if cid is not None:
-            chat_ref = f"@{cid}"
-    elif group:
-        gid = group.get("groupId")
-        if gid is not None:
-            chat_ref = f"#{gid}"
-
-    if chat_ref:
-        for a, data in targets.items():
-            if data.get("chat_ref") == chat_ref:
-                alias = a
-                break
-
-    # Direction: CLI v7 puts it in meta.chatDir.type ("directRcv" /
-    # "directSnd", "groupRcv" / "groupSnd"); legacy versions used
-    # meta.direction. Everything ending in "snd" is outgoing — reading the
-    # full type instead of comparing to "directSnd" exactly also covers
-    # group chats. Unreadable shapes fall back to "incoming" (same as the
-    # old behaviour) rather than guessing wrong.
-    chat_dir = meta.get("chatDir") if isinstance(meta.get("chatDir"), dict) else None
-    if chat_dir is not None:
-        dir_type = chat_dir.get("type")
-    else:
-        direction_meta = meta.get("direction")
-        dir_type = (
-            direction_meta.get("type")
-            if isinstance(direction_meta, dict)
-            else direction_meta
-        )
-    direction = "outgoing" if str(dir_type or "").lower().endswith("snd") else "incoming"
-
-    # Best-effort read/delivered status for outgoing bubbles (✓ / ✓✓ in the
-    # card). The exact `itemStatus.type` strings (sndNew/sndSent/sndRcvd/
-    # sndRead…) are not confirmed against every CLI version, so unknown
-    # shapes just fall back to "sent" rather than guessing wrong.
-    status = "sent"
-    if direction == "outgoing":
-        item_status = meta.get("itemStatus") or {}
-        status_type = item_status.get("type") if isinstance(item_status, dict) else item_status
-        if status_type in ("sndRead",):
-            status = "read"
-        elif status_type in ("sndRcvd",):
-            status = "delivered"
-
-    return {
-        "alias": alias,
-        "chat_ref": chat_ref,
-        "text": text,
-        "file": file_info,
-        "direction": direction,
-        "status": status,
-        "item_id": (ci.get("itemId") if isinstance(ci, dict) else None) or meta.get("itemId"),
-        "timestamp": meta.get("itemTs") or meta.get("createdAt"),
-        "edited": bool(meta.get("itemEdited")),
-    }
-
-
 def _fire_message_event(
     hass: HomeAssistant,
     entry_id: str,
     item: dict[str, Any],
     targets: dict[str, Any],
     inbox_dir: str | None = None,
-) -> None:
-    """Translate a SimpleX chat item into a Home Assistant event."""
+    registry: SimplexTargetRegistry | None = None,
+) -> dict[str, Any] | None:
+    """Translate a SimpleX chat item into a Home Assistant event.
+
+    The per-chat state (last message, unread counter) is updated *before*
+    the event is fired, so any listener reading the registry already sees
+    the new state. Returns the normalized message, or None when the item is
+    not renderable.
+    """
     normalized = normalize_chat_item(item, targets, inbox_dir)
     if normalized is None:
-        return
+        return None
+
+    if registry is not None:
+        _apply_message_to_registry(registry, normalized)
 
     hass.bus.async_fire(
         EVENT_MESSAGE_RECEIVED,
@@ -457,6 +346,214 @@ def _fire_message_event(
             "raw": item,
         },
     )
+    return normalized
+
+
+# ------------------------------------------------------------------
+# Auto-discovery of contacts and groups
+# ------------------------------------------------------------------
+
+# CLI events that change the set of known chats (official Bot API
+# "Contact connection events" + the group ones). Each of them is handled
+# so a contact accepted while HA is running appears without a restart.
+CONTACT_EVENT_TYPES = frozenset(
+    {
+        "contactConnected",
+        "contactSndReady",
+        "contactUpdated",
+        "contactDeletedByContact",
+        "receivedContactRequest",
+        "newMemberContactReceivedInv",
+        "userJoinedGroup",
+        "groupUpdated",
+    }
+)
+
+# ContactStatus enum of the CLI v7: active | deleted | deletedByUser | rejected
+_DEAD_CONTACT_STATUSES = frozenset({"deleted", "deletedByUser", "rejected"})
+
+
+def _contact_display_name(contact: dict[str, Any], fallback: str) -> str:
+    """Return the best human name for a contact."""
+    return str(
+        contact.get("localDisplayName")
+        or (contact.get("profile") or {}).get("displayName")
+        or fallback
+    )
+
+
+def _group_display_name(group: dict[str, Any], fallback: str) -> str:
+    """Return the best human name for a group."""
+    return str(
+        group.get("localDisplayName")
+        or (group.get("groupProfile") or {}).get("displayName")
+        or fallback
+    )
+
+
+async def _refresh_targets(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    client: SimplexWsClient,
+    registry: SimplexTargetRegistry,
+) -> bool:
+    """Re-read the CLI's contacts and groups and update the registry.
+
+    Returns True when at least one chat was newly registered.
+    """
+    contacts: list[dict[str, Any]] = []
+    groups: list[dict[str, Any]] = []
+
+    try:
+        contacts = await client.list_contacts()
+    except SimplexWsError as exc:
+        _LOGGER.debug("list_contacts failed: %s", exc)
+    try:
+        groups = await client.list_groups()
+    except SimplexWsError as exc:
+        _LOGGER.debug("list_groups failed: %s", exc)
+
+    created = False
+
+    for contact in contacts:
+        if not isinstance(contact, dict):
+            continue
+        cid = contact.get("contactId")
+        if cid is None:
+            continue
+        status = contact.get("contactStatus")
+        if status in _DEAD_CONTACT_STATUSES:
+            continue
+        _, is_new = registry.upsert_discovered(
+            f"@{cid}",
+            _contact_display_name(contact, f"Contact {cid}"),
+            "contact",
+            status in (None, "active"),
+        )
+        created = created or is_new
+
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        gid = group.get("groupId")
+        if gid is None:
+            continue
+        _, is_new = registry.upsert_discovered(
+            f"#{gid}",
+            _group_display_name(group, f"Group {gid}"),
+            "group",
+            True,
+        )
+        created = created or is_new
+
+    _LOGGER.info(
+        "SimpleX auto-discovery: %d contact(s), %d group(s) known (%d auto-discovered)",
+        len(contacts),
+        len(groups),
+        len(registry.discovered),
+    )
+    _sync_targets(hass, entry, registry, created)
+    return created
+
+
+def _sync_targets(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    registry: SimplexTargetRegistry,
+    changed: bool = False,
+) -> None:
+    """Refresh the merged targets view and notify the entity platforms."""
+    data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if isinstance(data, dict):
+        data["targets"] = registry.all()
+    if changed:
+        hass.bus.async_fire(
+            EVENT_TARGETS_UPDATED,
+            {
+                "entry_id": entry.entry_id,
+                "aliases": [target.alias for target in registry.targets],
+            },
+        )
+
+
+def _handle_contact_event(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    registry: SimplexTargetRegistry,
+    resp: dict[str, Any],
+) -> None:
+    """Handle a contact / group lifecycle event coming from the CLI."""
+    etype = resp.get("type")
+    created = False
+
+    contact = resp.get("contact") or resp.get("fromContact") or {}
+    if not isinstance(contact, dict):
+        contact = {}
+    group = resp.get("groupInfo") or resp.get("group") or {}
+    if not isinstance(group, dict):
+        group = {}
+
+    cid = contact.get("contactId")
+    gid = group.get("groupId")
+
+    if cid is not None:
+        connected = etype != "contactDeletedByContact"
+        _, is_new = registry.upsert_discovered(
+            f"@{cid}",
+            _contact_display_name(contact, f"Contact {cid}"),
+            "contact",
+            connected,
+        )
+        created = created or is_new
+        _LOGGER.info(
+            "SimpleX event %s → contact @%s (%s)",
+            etype,
+            cid,
+            "connected" if connected else "deleted",
+        )
+    elif gid is not None:
+        _, is_new = registry.upsert_discovered(
+            f"#{gid}",
+            _group_display_name(group, f"Group {gid}"),
+            "group",
+            True,
+        )
+        created = created or is_new
+    elif etype == "receivedContactRequest":
+        request = resp.get("contactRequest") or {}
+        name = request.get("localDisplayName") if isinstance(request, dict) else None
+        _LOGGER.info(
+            "SimpleX received a contact request from %s — accept it in SimpleX "
+            "Chat, or enable auto-accept in the bridge (SIMPLEX_AUTO_ACCEPT=true).",
+            name or "an unknown contact",
+        )
+
+    _sync_targets(hass, entry, registry, created)
+
+
+def _apply_message_to_registry(
+    registry: SimplexTargetRegistry, normalized: dict[str, Any]
+) -> None:
+    """Update the per-chat live state after a message was received."""
+    chat_ref = normalized.get("chat_ref")
+    if not chat_ref:
+        return
+
+    target = registry.by_ref(chat_ref)
+    if target is None:
+        # A chat we did not know about yet (first message from a contact
+        # that was neither configured nor discovered): register it now so
+        # the message is not an orphan.
+        name = normalized.get("display_name") or str(chat_ref)
+        target, _ = registry.upsert_discovered(
+            str(chat_ref), str(name), normalized.get("type"), True
+        )
+
+    target.last_message = normalized.get("text")
+    target.last_timestamp = normalized.get("timestamp")
+    target.last_direction = normalized.get("direction")
+    if normalized.get("direction") == "incoming":
+        target.unread_count = (target.unread_count or 0) + 1
 
 
 # ------------------------------------------------------------------
@@ -468,12 +565,18 @@ def _register_services(hass: HomeAssistant) -> None:
     """Register domain services."""
 
     async def handle_send_message(call: ServiceCall) -> None:
-        alias = call.data["alias"]
+        alias = call.data.get("alias")
         message = call.data["message"]
         title = call.data.get("title")
-        data = _get_entry_data_for_alias(hass, alias)
+        chat_ref = call.data.get("chat_ref")
+        data = _get_entry_data_for_alias(hass, alias) if alias else _get_entry_data(
+            hass, call.data.get("entry_id")
+        )
         client: SimplexWsClient = data["client"]
-        chat_ref = data["targets"][alias].get("chat_ref")
+        if not chat_ref:
+            if not alias:
+                raise HomeAssistantError("Either 'alias' or 'chat_ref' is required")
+            chat_ref = data["targets"][alias].get("chat_ref")
         if not chat_ref:
             raise HomeAssistantError(f"Alias '{alias}' has no chat_ref")
         full = f"{title}: {message}" if title else message
@@ -483,11 +586,17 @@ def _register_services(hass: HomeAssistant) -> None:
             raise HomeAssistantError(str(err)) from err
 
     async def handle_send_file(call: ServiceCall) -> None:
-        alias = call.data["alias"]
+        alias = call.data.get("alias")
+        chat_ref = call.data.get("chat_ref")
         file_path = call.data["file_path"]
-        data = _get_entry_data_for_alias(hass, alias)
+        data = _get_entry_data_for_alias(hass, alias) if alias else _get_entry_data(
+            hass, call.data.get("entry_id")
+        )
         client: SimplexWsClient = data["client"]
-        chat_ref = data["targets"][alias].get("chat_ref")
+        if not chat_ref:
+            if not alias:
+                raise HomeAssistantError("Either 'alias' or 'chat_ref' is required")
+            chat_ref = data["targets"][alias].get("chat_ref")
         if not chat_ref:
             raise HomeAssistantError(f"Alias '{alias}' has no chat_ref")
         if not await hass.async_add_executor_job(Path(file_path).is_file):
@@ -542,6 +651,61 @@ def _register_services(hass: HomeAssistant) -> None:
             raise HomeAssistantError(str(err)) from err
         return {"contacts": contacts}
 
+    async def handle_list_groups(call: ServiceCall) -> dict[str, Any]:
+        entry_id = call.data.get("entry_id")
+        data = _get_entry_data(hass, entry_id)
+        client: SimplexWsClient = data["client"]
+        try:
+            groups = await client.list_groups()
+        except SimplexWsError as err:
+            raise HomeAssistantError(str(err)) from err
+        return {"groups": groups}
+
+    async def handle_refresh_contacts(call: ServiceCall) -> dict[str, Any]:
+        """Re-run the auto-discovery and return the resulting target list."""
+        entry_id = call.data.get("entry_id")
+        data = _get_entry_data(hass, entry_id)
+        client: SimplexWsClient = data["client"]
+        registry: SimplexTargetRegistry | None = data.get("registry")
+        entry: ConfigEntry = data["entry"]
+        if registry is None:
+            raise HomeAssistantError("SimpleX target registry is not available")
+        try:
+            await _refresh_targets(hass, entry, client, registry)
+        except SimplexWsError as err:
+            raise HomeAssistantError(str(err)) from err
+        return {
+            "targets": registry.all(),
+            "contacts": len(registry.configured),
+            "discovered": len(registry.discovered),
+        }
+
+    async def handle_mark_read(call: ServiceCall) -> dict[str, Any]:
+        """Mark the items of a chat as read on the SimpleX side."""
+        alias = call.data.get("alias")
+        chat_ref = call.data.get("chat_ref")
+        item_ids = call.data.get("item_ids") or []
+        data = _get_entry_data_for_alias(hass, alias) if alias else _get_entry_data(
+            hass, call.data.get("entry_id")
+        )
+        client: SimplexWsClient = data["client"]
+        if not chat_ref:
+            if not alias:
+                raise HomeAssistantError("Either 'alias' or 'chat_ref' is required")
+            chat_ref = data["targets"][alias].get("chat_ref")
+        if not chat_ref:
+            raise HomeAssistantError(f"Alias '{alias}' has no chat_ref")
+        if not item_ids:
+            raise HomeAssistantError("'item_ids' is required")
+        try:
+            await client.mark_chat_read(chat_ref, list(item_ids))
+        except SimplexWsError as err:
+            raise HomeAssistantError(str(err)) from err
+        registry: SimplexTargetRegistry | None = data.get("registry")
+        if registry is not None:
+            registry.update_state(chat_ref, unread_count=0)
+        return {"chat_ref": chat_ref, "item_ids": list(item_ids)}
+
     async def handle_accept_invite(call: ServiceCall) -> dict[str, Any]:
         entry_id = call.data.get("entry_id")
         link = call.data["invite_link"]
@@ -580,9 +744,11 @@ def _register_services(hass: HomeAssistant) -> None:
         handle_send_message,
         schema=vol.Schema(
             {
-                vol.Required("alias"): cv.string,
+                vol.Optional("alias"): cv.string,
+                vol.Optional("chat_ref"): cv.string,
                 vol.Required("message"): cv.string,
                 vol.Optional("title"): cv.string,
+                vol.Optional("entry_id"): cv.string,
             }
         ),
     )
@@ -593,8 +759,10 @@ def _register_services(hass: HomeAssistant) -> None:
         handle_send_file,
         schema=vol.Schema(
             {
-                vol.Required("alias"): cv.string,
+                vol.Optional("alias"): cv.string,
+                vol.Optional("chat_ref"): cv.string,
                 vol.Required("file_path"): cv.string,
+                vol.Optional("entry_id"): cv.string,
             }
         ),
     )
@@ -612,6 +780,37 @@ def _register_services(hass: HomeAssistant) -> None:
         SERVICE_LIST_CONTACTS,
         handle_list_contacts,
         schema=vol.Schema({vol.Optional("entry_id"): cv.string}),
+        supports_response=True,
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_LIST_GROUPS,
+        handle_list_groups,
+        schema=vol.Schema({vol.Optional("entry_id"): cv.string}),
+        supports_response=True,
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_REFRESH_CONTACTS,
+        handle_refresh_contacts,
+        schema=vol.Schema({vol.Optional("entry_id"): cv.string}),
+        supports_response=True,
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_MARK_READ,
+        handle_mark_read,
+        schema=vol.Schema(
+            {
+                vol.Optional("alias"): cv.string,
+                vol.Optional("chat_ref"): cv.string,
+                vol.Required("item_ids"): vol.All(cv.ensure_list, [cv.positive_int]),
+                vol.Optional("entry_id"): cv.string,
+            }
+        ),
         supports_response=True,
     )
 

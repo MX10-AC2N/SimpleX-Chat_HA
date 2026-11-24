@@ -23,8 +23,9 @@
         "menu_options": {
           "add_contact": "Add a contact / group (paste invite link)",
           "remove_contact": "Remove a contact",
-          "show_targets": "Show configured contacts",
-          "settings": "Settings (outbox/inbox directories, files)"
+          "rename_contact": "Rename a contact / group",
+          "show_targets": "Show configured and discovered contacts",
+          "settings": "Settings (outbox/inbox directories, files, auto-discovery)"
         }
       },
       "settings": {
@@ -33,7 +34,8 @@
         "data": {
           "outbox_dir": "Outbox directory",
           "inbox_dir": "Inbox directory (received files, read-only)",
-          "auto_accept_files": "Auto-accept incoming files"
+          "auto_accept_files": "Auto-accept incoming files",
+          "auto_discover": "Auto-discover contacts and groups"
         }
       },
       "add_contact": {
@@ -50,8 +52,16 @@
           "alias": "Contact to remove"
         }
       },
+      "rename_contact": {
+        "title": "Rename a contact or group",
+        "description": "{hint}",
+        "data": {
+          "alias": "Contact to rename",
+          "new_alias": "New alias"
+        }
+      },
       "show_targets": {
-        "title": "Configured contacts",
+        "title": "Known contacts",
         "description": "{targets}"
       }
     },
@@ -66,7 +76,8 @@
       "unknown": "An unexpected error occurred."
     },
     "abort": {
-      "no_targets": "No contacts configured yet."
+      "no_targets": "No contacts configured yet.",
+      "not_loaded": "The SimpleX integration is not loaded yet."
     }
   }
 }
