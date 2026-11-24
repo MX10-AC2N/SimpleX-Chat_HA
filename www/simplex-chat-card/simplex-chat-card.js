@@ -9,6 +9,7 @@
  * Backend requirements (provided by the `simplex` custom integration,
  * v2.1+):
  *   - HA websocket command "simplex/history" → initial message list
+ *   - HA websocket command "simplex/contacts" → display names + live state
  *   - HA event "simplex_message_received" → live updates
  *   - services simplex.send_message / simplex.send_file (via /api/simplex/upload)
  *
@@ -22,11 +23,24 @@
  *   alias: family
  *   title: Famille            # optional, defaults to the alias
  *   history_limit: 50         # optional, default 50
+ *
+ * Dynamic mode — ONE generic view for every contact:
+ *   type: custom:simplex-chat-card
+ *   alias: auto               # or simply omit the key
+ *
+ * In dynamic mode the card reads the alias from the URL:
+ *   - the hash      → /simplex-chat#alice  (survives a page reload)
+ *   - the last path segment → /simplex-chat/alice
+ *
+ * That is what makes the conversation list card work out of the box with
+ * auto-discovered contacts: no view has to be declared per contact.
  * -----------------------------------------------------------------------
  */
 
 const UPLOAD_URL = "/api/simplex/upload";
 const MAX_RECORD_SECONDS = 120;
+// The CLI carries the item ids on a single command line — cap the batch.
+const MAX_MARK_READ_IDS = 50;
 
 class SimplexChatCard extends HTMLElement {
   constructor() {
@@ -45,27 +59,43 @@ class SimplexChatCard extends HTMLElement {
     this._stream = null;
     this._timerHandle = null;
     this._recordStart = 0;
+    this._alias = null; // the alias actually in use
+    this._displayName = null;
+    this._contactType = "contact";
+    this._contacts = null; // alias → target, from "simplex/contacts"
+    this._locationHandler = null;
   }
 
   setConfig(config) {
-    if (!config.alias) {
-      throw new Error("simplex-chat-card: 'alias' is required in the card config");
-    }
+    const dynamic = !config.alias || config.alias === "auto";
     this._config = {
-      alias: config.alias,
-      title: config.title || config.alias,
+      dynamic,
+      alias: dynamic ? null : config.alias,
+      title: config.title || null,
       history_limit: config.history_limit || 50,
       entry_id: config.entry_id || null,
+      connection_entity:
+        config.connection_entity || "binary_sensor.simplex_chat_connection",
+      auto_mark_read: config.auto_mark_read !== false,
     };
+    this._alias = this._config.alias;
     this._renderShell();
+    if (this._config.dynamic) {
+      this._bindLocation();
+    }
   }
 
   set hass(hass) {
     const first = this._hass === null;
     this._hass = hass;
     if (first) {
-      this._loadHistory();
+      if (this._config.dynamic) {
+        this._applyAlias(this._aliasFromLocation());
+      } else {
+        this._applyAlias(this._config.alias);
+      }
       this._subscribe();
+      this._loadContacts();
     }
   }
 
@@ -78,8 +108,141 @@ class SimplexChatCard extends HTMLElement {
       this._unsubscribe();
       this._unsubscribe = null;
     }
+    if (this._locationHandler) {
+      window.removeEventListener("popstate", this._locationHandler);
+      window.removeEventListener("hashchange", this._locationHandler);
+      this._locationHandler = null;
+    }
     if (this._timerHandle) window.clearInterval(this._timerHandle);
     if (this._stream) this._stream.getTracks().forEach((t) => t.stop());
+  }
+
+  // ------------------------------------------------------------------
+  // Dynamic alias resolution
+  // ------------------------------------------------------------------
+
+  _aliasFromLocation() {
+    // The hash is the primary carrier: it survives a page reload, while
+    // the path is owned by Home Assistant's router.
+    const hash = (window.location.hash || "").replace(/^#/, "").trim();
+    if (hash) {
+      try {
+        return decodeURIComponent(hash.split("?")[0]);
+      } catch (e) {
+        return hash.split("?")[0];
+      }
+    }
+    // Fallback: the conversation list stores the last chosen alias, in case
+    // Home Assistant's router normalised the URL and dropped the hash.
+    try {
+      const stored = window.sessionStorage.getItem("simplex_chat_alias");
+      if (stored) return stored;
+    } catch (e) {
+      /* private mode: the hash alone will do */
+    }
+    const segments = (window.location.pathname || "").split("/").filter(Boolean);
+    return segments.length ? decodeURIComponent(segments[segments.length - 1]) : null;
+  }
+
+  _bindLocation() {
+    this._locationHandler = () => {
+      const alias = this._aliasFromLocation();
+      if (alias && alias !== this._alias) {
+        this._applyAlias(alias);
+      }
+    };
+    window.addEventListener("popstate", this._locationHandler);
+    window.addEventListener("hashchange", this._locationHandler);
+    // Home Assistant's router does not always fire popstate for in-app
+    // navigation, so also listen to its own event.
+    window.addEventListener("location-changed", this._locationHandler);
+  }
+
+  _applyAlias(alias) {
+    this._alias = alias || null;
+    this._messages = [];
+    this._loaded = false;
+    this._hasMore = false;
+    this._updateHeader();
+    if (this._alias) {
+      this._loadHistory();
+    } else {
+      this._renderMessages(true);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Contacts / display names
+  // ------------------------------------------------------------------
+
+  async _loadContacts() {
+    try {
+      const result = await this._hass.connection.sendMessagePromise({
+        type: "simplex/contacts",
+        ...(this._config.entry_id ? { entry_id: this._config.entry_id } : {}),
+      });
+      this._contacts = result.targets || {};
+      this._updateHeader();
+    } catch (err) {
+      // The contact list is a nicety (it only provides the pretty name);
+      // a failure must not break the conversation itself.
+      this._contacts = null;
+    }
+  }
+
+  _contactInfo() {
+    if (!this._contacts || !this._alias) return null;
+    return this._contacts[this._alias] || null;
+  }
+
+  _updateHeader() {
+    const info = this._contactInfo();
+    const nameEl = this.shadowRoot.getElementById("header-name");
+    const avatarEl = this.shadowRoot.getElementById("header-avatar");
+    const subEl = this.shadowRoot.getElementById("status-line");
+    const readBtn = this.shadowRoot.getElementById("read-btn");
+    if (!nameEl || !avatarEl) return;
+
+    this._contactType = (info && info.type) || "contact";
+    const label =
+      (info && info.name) ||
+      this._config.title ||
+      this._alias ||
+      "SimpleX";
+    this._displayName = label;
+    nameEl.textContent = label;
+    avatarEl.textContent = (label || "?").trim().charAt(0).toUpperCase();
+    avatarEl.classList.toggle("group", !!(info && info.type === "group"));
+
+    const unread = this._unreadIncoming();
+    if (readBtn) {
+      readBtn.hidden = unread.length === 0;
+      readBtn.title = `Marquer ${unread.length} message(s) comme lu(s)`;
+    }
+
+    if (subEl && !this._recording) {
+      const connected = this._isConnected();
+      subEl.textContent = connected
+        ? info && info.type === "group"
+          ? "Groupe · connecté"
+          : "Connecté"
+        : "Hors ligne";
+      subEl.className = connected ? "sub" : "sub offline";
+    }
+  }
+
+  _isConnected() {
+    if (!this._hass) return false;
+    const state = this._hass.states[this._config.connection_entity];
+    return !!state && state.state === "on";
+  }
+
+  _unreadIncoming() {
+    const ids = this._messages
+      .filter((m) => m.direction !== "outgoing" && m.item_id != null)
+      .map((m) => m.item_id);
+    // The CLI takes the ids on a single command line: keep the batch sane.
+    return ids.slice(-MAX_MARK_READ_IDS);
   }
 
   // ------------------------------------------------------------------
@@ -87,10 +250,11 @@ class SimplexChatCard extends HTMLElement {
   // ------------------------------------------------------------------
 
   async _loadHistory() {
+    if (!this._alias) return;
     try {
       const result = await this._hass.connection.sendMessagePromise({
         type: "simplex/history",
-        alias: this._config.alias,
+        alias: this._alias,
         limit: this._config.history_limit,
         ...(this._config.entry_id ? { entry_id: this._config.entry_id } : {}),
       });
@@ -99,6 +263,10 @@ class SimplexChatCard extends HTMLElement {
       this._loaded = true;
       this._renderMessages(true);
       this._attachScrollListener();
+      this._updateHeader();
+      if (this._config.auto_mark_read) {
+        this._markRead(this._unreadIncoming(), true);
+      }
     } catch (err) {
       this._renderError(err.message || String(err));
     }
@@ -136,7 +304,7 @@ class SimplexChatCard extends HTMLElement {
     try {
       const result = await this._hass.connection.sendMessagePromise({
         type: "simplex/history",
-        alias: this._config.alias,
+        alias: this._alias,
         limit: this._config.history_limit,
         before_item_id: oldest.item_id,
         ...(this._config.entry_id ? { entry_id: this._config.entry_id } : {}),
@@ -167,9 +335,13 @@ class SimplexChatCard extends HTMLElement {
     this._hass.connection
       .subscribeEvents((event) => {
         const data = event.data || {};
-        if (data.alias !== this._config.alias) return;
+        if (data.alias !== this._alias) return;
         this._messages.push(data);
         this._renderMessages(true);
+        this._updateHeader();
+        if (this._config.auto_mark_read) {
+          this._markRead([data.item_id], true);
+        }
       }, "simplex_message_received")
       .then((unsub) => {
         this._unsubscribe = unsub;
@@ -178,6 +350,31 @@ class SimplexChatCard extends HTMLElement {
         // eslint-disable-next-line no-console
         console.warn("simplex-chat-card: could not subscribe to events", err);
       });
+
+    // Keep the header connection dot honest.
+    this._hass.connection
+      .subscribeEvents(() => this._updateHeader(), "state_changed")
+      .then((unsub) => {
+        this._stateUnsub = unsub;
+      })
+      .catch(() => {});
+  }
+
+  async _markRead(itemIds, silent) {
+    const ids = (itemIds || []).filter((v) => v != null);
+    if (!ids.length || !this._alias) return;
+    try {
+      await this._hass.callService("simplex", "mark_read", {
+        alias: this._alias,
+        item_ids: ids,
+      });
+      this._updateHeader();
+    } catch (err) {
+      if (!silent) {
+        const statusLine = this.shadowRoot.getElementById("status-line");
+        if (statusLine) statusLine.textContent = `Échec : ${err.message || err}`;
+      }
+    }
   }
 
   // ------------------------------------------------------------------
@@ -209,9 +406,19 @@ class SimplexChatCard extends HTMLElement {
           background: linear-gradient(135deg, #3fb37f, #2f9e6f);
           display: flex; align-items: center; justify-content: center;
           font-weight: 600; font-size: 1em;
+          flex: 0 0 auto;
         }
-        .header .name { font-weight: 600; font-size: 1.05em; }
+        .header .avatar.group { background: linear-gradient(135deg, #4a7fd4, #3567b8); }
+        .header .who { flex: 1 1 auto; min-width: 0; }
+        .header .name { font-weight: 600; font-size: 1.05em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .header .sub { font-size: 0.78em; opacity: 0.7; }
+        .header .sub.offline { color: #e0a06a; opacity: 1; }
+        .header .read-btn {
+          border: none; background: #2f9e6f; color: #fff;
+          border-radius: 14px; padding: 4px 10px; font-size: 0.75em;
+          cursor: pointer; flex: 0 0 auto;
+        }
+        .header .read-btn[hidden] { display: none; }
 
         .messages {
           flex: 1 1 auto; overflow-y: auto;
@@ -224,6 +431,16 @@ class SimplexChatCard extends HTMLElement {
         .row { display: flex; }
         .row.out { justify-content: flex-end; }
         .row.in { justify-content: flex-start; }
+
+        .day-sep {
+          align-self: center;
+          margin: 10px 0 4px;
+          padding: 2px 10px;
+          border-radius: 10px;
+          background: rgba(255,255,255,0.08);
+          color: #9fb3ba;
+          font-size: 0.72em;
+        }
 
         .bubble {
           max-width: 75%;
@@ -245,6 +462,10 @@ class SimplexChatCard extends HTMLElement {
           color: #eef3f5;
           border-bottom-left-radius: 2px;
         }
+        .bubble .sender {
+          display: block; font-size: 0.72em; font-weight: 600;
+          color: #6fd3ff; margin-bottom: 2px;
+        }
         .bubble .meta {
           display: block; text-align: right; margin-top: 3px;
           font-size: 0.68em; opacity: 0.7;
@@ -254,7 +475,7 @@ class SimplexChatCard extends HTMLElement {
           font-size: 0.9em; opacity: 0.9; margin-bottom: 2px;
         }
         .bubble .file svg { width: 16px; height: 16px; fill: currentColor; }
-        .bubble img.media { max-width: 100%; border-radius: 6px; display: block; margin-bottom: 4px; }
+        .bubble img.media { max-width: 100%; border-radius: 6px; display: block; margin-bottom: 4px; cursor: zoom-in; }
         .bubble audio.media, .bubble video.media { max-width: 100%; display: block; margin-bottom: 4px; }
         .bubble video.media { border-radius: 6px; }
         .ticks { display: inline-flex; margin-left: 4px; vertical-align: middle; }
@@ -301,11 +522,12 @@ class SimplexChatCard extends HTMLElement {
       </style>
       <ha-card>
         <div class="header">
-          <div class="avatar">${this._initial(this._config.title)}</div>
-          <div>
-            <div class="name">${this._escape(this._config.title)}</div>
+          <div class="avatar" id="header-avatar">S</div>
+          <div class="who">
+            <div class="name" id="header-name">SimpleX</div>
             <div class="sub" id="status-line">SimpleX Chat</div>
           </div>
+          <button class="read-btn" id="read-btn" hidden>Marquer lu</button>
         </div>
         <div class="messages" id="messages"><div class="empty">Chargement…</div></div>
         <video class="preview" id="preview" autoplay muted playsinline></video>
@@ -324,6 +546,11 @@ class SimplexChatCard extends HTMLElement {
     });
     root.getElementById("mic-btn").addEventListener("click", () => this._toggleRecord("audio"));
     root.getElementById("cam-btn").addEventListener("click", () => this._toggleRecord("video"));
+    const readBtn = root.getElementById("read-btn");
+    if (readBtn) {
+      readBtn.addEventListener("click", () => this._markRead(this._unreadIncoming(), false));
+    }
+    this._updateHeader();
   }
 
   _iconMic() {
@@ -365,6 +592,12 @@ class SimplexChatCard extends HTMLElement {
     const container = this.shadowRoot.getElementById("messages");
     if (!container) return;
 
+    if (!this._alias) {
+      container.innerHTML =
+        '<div class="empty">Aucune conversation sélectionnée. Choisissez un contact dans la liste.</div>';
+      return;
+    }
+
     if (!this._messages.length) {
       container.innerHTML = this._loaded
         ? '<div class="empty">Aucun message pour l\'instant.</div>'
@@ -380,25 +613,35 @@ class SimplexChatCard extends HTMLElement {
       ? '<div class="load-older">Chargement des messages précédents…</div>'
       : "";
 
-    container.innerHTML =
-      loaderHtml +
-      sorted
-        .map((m) => {
-          const dir = m.direction === "outgoing" ? "out" : "in";
-          const time = this._formatTime(m.timestamp);
-          const fileHtml = this._renderFile(m.file);
-          const textHtml = m.text ? this._escape(m.text) : "";
-          const ticksHtml = dir === "out" ? this._renderTicks(m.status) : "";
-          return `
-          <div class="row ${dir}">
-            <div class="bubble ${dir}">
-              ${fileHtml}
-              ${textHtml}
-              <span class="meta">${time}${m.edited ? " · modifié" : ""}${ticksHtml}</span>
-            </div>
-          </div>`;
-        })
-        .join("");
+    let lastDay = null;
+    let html = "";
+    for (const m of sorted) {
+      const day = this._dayKey(m.timestamp);
+      if (day && day !== lastDay) {
+        html += `<div class="day-sep">${this._escape(this._dayLabel(m.timestamp))}</div>`;
+        lastDay = day;
+      }
+      const dir = m.direction === "outgoing" ? "out" : "in";
+      const time = this._formatTime(m.timestamp);
+      const fileHtml = this._renderFile(m.file);
+      const textHtml = m.text ? this._escape(m.text) : "";
+      const ticksHtml = dir === "out" ? this._renderTicks(m.status) : "";
+      const senderHtml =
+        dir === "in" && this._contactType === "group" && m.sender
+          ? `<span class="sender">${this._escape(m.sender)}</span>`
+          : "";
+      html += `
+        <div class="row ${dir}">
+          <div class="bubble ${dir}">
+            ${senderHtml}
+            ${fileHtml}
+            ${textHtml}
+            <span class="meta">${time}${m.edited ? " · modifié" : ""}${ticksHtml}</span>
+          </div>
+        </div>`;
+    }
+
+    container.innerHTML = loaderHtml + html;
 
     if (scrollToBottom) {
       container.scrollTop = container.scrollHeight;
@@ -436,10 +679,36 @@ class SimplexChatCard extends HTMLElement {
     return `<span class="${cls}">${check}${double ? check : ""}</span>`;
   }
 
-  _formatTime(ts) {
-    if (!ts) return "";
+  _dayKey(ts) {
+    const d = this._parseDate(ts);
+    if (!d) return null;
+    return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  }
+
+  _dayLabel(ts) {
+    const d = this._parseDate(ts);
+    if (!d) return "";
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+    const same = (a, b) =>
+      a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() &&
+      a.getDate() === b.getDate();
+    if (same(d, today)) return "Aujourd'hui";
+    if (same(d, yesterday)) return "Hier";
+    return d.toLocaleDateString([], { day: "2-digit", month: "long", year: "numeric" });
+  }
+
+  _parseDate(ts) {
+    if (!ts) return null;
     const d = new Date(ts);
-    if (Number.isNaN(d.getTime())) return "";
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  _formatTime(ts) {
+    const d = this._parseDate(ts);
+    if (!d) return "";
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
 
@@ -451,16 +720,32 @@ class SimplexChatCard extends HTMLElement {
     const input = this.shadowRoot.getElementById("text-input");
     const message = (input.value || "").trim();
     if (!message) return;
+    if (!this._alias) {
+      this._setStatus("Aucune conversation sélectionnée.");
+      return;
+    }
     const statusLine = this.shadowRoot.getElementById("status-line");
     try {
       await this._hass.callService("simplex", "send_message", {
-        alias: this._config.alias,
+        alias: this._alias,
         message,
       });
       input.value = "";
-      if (statusLine) statusLine.textContent = "SimpleX Chat";
+      this._setStatus(null);
     } catch (err) {
-      if (statusLine) statusLine.textContent = `Échec : ${err.message || err}`;
+      this._setStatus(`Échec : ${err.message || err}`);
+    }
+  }
+
+  _setStatus(text) {
+    if (this._recording) return;
+    const statusLine = this.shadowRoot.getElementById("status-line");
+    if (!statusLine) return;
+    if (text) {
+      statusLine.textContent = text;
+      statusLine.className = "sub offline";
+    } else {
+      this._updateHeader();
     }
   }
 
@@ -474,11 +759,14 @@ class SimplexChatCard extends HTMLElement {
       this._recorder.stop();
       return;
     }
+    if (!this._alias) {
+      this._setStatus("Aucune conversation sélectionnée.");
+      return;
+    }
     try {
       await this._startRecording(kind);
     } catch (err) {
-      const statusLine = this.shadowRoot.getElementById("status-line");
-      if (statusLine) statusLine.textContent = `Micro/caméra indisponible : ${err.message || err}`;
+      this._setStatus(`Micro/caméra indisponible : ${err.message || err}`);
     }
   }
 
@@ -507,6 +795,7 @@ class SimplexChatCard extends HTMLElement {
     this._recorder.start();
 
     this._recordStart = Date.now();
+    this._recording = true;
     this._setRecordingUi(kind, true);
     const statusLine = this.shadowRoot.getElementById("status-line");
     this._timerHandle = window.setInterval(() => {
@@ -539,6 +828,7 @@ class SimplexChatCard extends HTMLElement {
       window.clearInterval(this._timerHandle);
       this._timerHandle = null;
     }
+    this._recording = false;
     this._setRecordingUi(this._recordKind, false);
     const preview = this.shadowRoot.getElementById("preview");
     if (preview) {
@@ -566,7 +856,7 @@ class SimplexChatCard extends HTMLElement {
     const statusLine = this.shadowRoot.getElementById("status-line");
     if (statusLine) statusLine.textContent = "Envoi en cours…";
     const form = new FormData();
-    form.append("alias", this._config.alias);
+    form.append("alias", this._alias);
     form.append("kind", kind);
     form.append("file", blob, "clip.webm");
     if (this._config.entry_id) form.append("entry_id", this._config.entry_id);
@@ -582,7 +872,7 @@ class SimplexChatCard extends HTMLElement {
       if (!resp.ok || !data.success) {
         throw new Error(data.error || `HTTP ${resp.status}`);
       }
-      if (statusLine) statusLine.textContent = "SimpleX Chat";
+      this._setStatus(null);
     } catch (err) {
       if (statusLine) statusLine.textContent = `Échec de l'envoi : ${err.message || err}`;
     }
