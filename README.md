@@ -10,10 +10,14 @@ SimpleX is a messenger that is private by design (no user identifiers, end-to-en
 
 ## Features
 
-- **Native notifications** — one `notify.*` entity per contact or group
+- **Auto-discovery** — the CLI's contacts and groups are discovered automatically; no more pasting a one-time invitation link for every contact
+- **Native notifications** — one `notify.*` entity per contact or group, created as soon as the bot knows them
 - **Incoming messages** — `simplex_message_received` event + sensor
-- **Connection status** — WebSocket `binary_sensor`
-- **Services** — send message, create invite, accept link, list contacts
+- **Live connection tracking** — a contact accepted while Home Assistant is running shows up immediately, no restart
+- **Per-contact entities** — last message, unread counter and connectivity, on one device per contact/group
+- **File & media sending** — `simplex.send_file`, plus the tablet upload endpoint
+- **Connection status & error reporting** — WebSocket `binary_sensor` + last CLI error sensor
+- **Services** — send message, send file, create invite, accept link, list contacts/groups, refresh, mark as read
 - **LLM / Assist tool** — `send_simplex_message` for voice and AI agents
 - **Automatic reconnection** with exponential backoff
 - **Translations** EN / FR
@@ -27,6 +31,8 @@ If Home Assistant runs in Docker, you **must** run a SimpleX Chat WebSocket daem
 
 → Full guide: **[DOCKER.md](DOCKER.md)** (compose examples, networking, troubleshooting).
 
+The reference daemon is **[MX10-AC2N/simplex-bridge](https://github.com/MX10-AC2N/simplex-bridge)**, whose WebSocket contract is validated by a dedicated test suite (T01–T13).
+
 ## Requirements
 
 1. **SimpleX Chat CLI** in WebSocket mode:
@@ -35,7 +41,8 @@ If Home Assistant runs in Docker, you **must** run a SimpleX Chat WebSocket daem
 simplex-chat -p 5225
 ```
 
-When Home Assistant runs in Docker, do **not** use `127.0.0.1` from inside the HA container.
+When Home Assistant runs in Docker, do **not** use `127.0.0.1` from inside the HA container
+unless both containers share the host network namespace.
 See the dedicated guide: **[DOCKER.md](DOCKER.md)**.
 
 2. Home Assistant **2025.8+** (2026.x recommended).
@@ -66,13 +73,36 @@ Restart Home Assistant, then add the integration from the UI.
 
 ## Configuring contacts
 
+### Automatic (recommended)
+
+Nothing to do. On start-up the integration asks the CLI for its contacts
+(`/_contacts`) and groups (`/_groups`), and keeps the list up to date from
+the connection events (`contactConnected`, `contactSndReady`,
+`contactUpdated`, `userJoinedGroup`, …).
+
+Every discovered chat gets:
+
+- a `notify.simplex_chat_<alias>` entity,
+- a device with a *Last message*, *Unread messages* and *Connected* entity,
+- a row in the *SimpleX Conversations* dashboard card.
+
+The alias is derived from the display name (`Éric` → `eric`). To choose your
+own: **Settings → Devices & services → SimpleX Chat → Configure → Rename a
+contact / group**.
+
+> Auto-discovery needs the bridge to accept contact requests automatically
+> (`SIMPLEX_AUTO_ACCEPT=true`). See [DOCKER.md](DOCKER.md).
+
+### Manual
+
 1. **Settings → Devices & services → SimpleX Chat → Configure**
 2. Choose **Add a contact / group**
 3. Enter a friendly alias (e.g. `Alice`, `Family`)
 4. Paste a SimpleX invitation link (1:1 or group)
-5. A `notify.simplex_alice` entity (or similar) is created automatically
+5. A `notify.simplex_chat_alice` entity (or similar) is created automatically
 
-You can also remove contacts or list them from the same menu.
+Manual and discovered contacts can be mixed; a manually configured alias
+always wins over the auto-derived one.
 
 ---
 
@@ -86,7 +116,7 @@ data:
   message: "Dinner is ready!"
   title: "Home"
 target:
-  entity_id: notify.simplex_alice
+  entity_id: notify.simplex_chat_alice
 ```
 
 Multiple recipients:
@@ -94,8 +124,8 @@ Multiple recipients:
 ```yaml
 target:
   entity_id:
-    - notify.simplex_alice
-    - notify.simplex_family
+    - notify.simplex_chat_alice
+    - notify.simplex_chat_family
 ```
 
 ### Dedicated service
@@ -107,6 +137,27 @@ data:
   message: "Front door opened"
   title: "Security"
 ```
+
+By chat reference instead of alias:
+
+```yaml
+action: simplex.send_message
+data:
+  chat_ref: "@3"
+  message: "Front door opened"
+```
+
+### Send a file
+
+```yaml
+action: simplex.send_file
+data:
+  alias: Alice
+  file_path: /config/simplex_outbox/clip.ogg
+```
+
+The path must be readable by the `simplex-chat` process — use a volume
+shared with the bridge container (see [DOCKER.md](DOCKER.md)).
 
 ### Create an invitation
 
@@ -123,6 +174,23 @@ action: simplex.accept_invite
 data:
   invite_link: "https://simplex.chat/invitation#..."
   alias: Bob
+```
+
+### Discover / refresh
+
+```yaml
+action: simplex.refresh_contacts
+```
+
+Forces a re-read of the CLI's contact and group lists.
+
+### Mark as read
+
+```yaml
+action: simplex.mark_read
+data:
+  alias: Alice
+  item_ids: [17, 18]
 ```
 
 ### Incoming events
@@ -144,21 +212,51 @@ automation:
           message: "{{ trigger.event.data.text }}"
 ```
 
-| Key         | Description                      |
-|-------------|----------------------------------|
-| `alias`     | Configured alias (if matched)    |
-| `chat_ref`  | `@123` or `#456`                 |
-| `text`      | Message body                     |
-| `direction` | `incoming` / `outgoing`          |
-| `item_id`   | Internal SimpleX ID              |
+| Key            | Description                                |
+|----------------|--------------------------------------------|
+| `alias`        | Alias of the chat (configured or derived)  |
+| `chat_ref`     | `@123` or `#456`                           |
+| `display_name` | Display name of the contact / group        |
+| `type`         | `contact` or `group`                       |
+| `text`         | Message body                               |
+| `direction`    | `incoming` / `outgoing`                    |
+| `status`       | `sent` / `delivered` / `read` / `sending`  |
+| `item_id`      | Internal SimpleX ID                        |
+| `timestamp`    | Message timestamp                          |
+| `edited`       | Whether the message was edited             |
+| `file`         | Attachment metadata (name, size, media URL)|
+
+Other events: `simplex_targets_updated` (a chat was discovered or removed) and
+`simplex_error` (the CLI answered with a `chatCmdError`).
 
 ### Sensors
 
+Entities live on two kinds of devices:
+
+- the **Simplex Chat** device — the integration itself
+  (`sensor.simplex_chat_*`, `binary_sensor.simplex_chat_connection`);
+- one device **per contact/group**, named after it
+  (`sensor.alice_last_message`, `binary_sensor.alice_connected`, …).
+
 | Entity | Description |
 |--------|-------------|
-| `binary_sensor.simplex_chat_connection` | WebSocket status |
-| `sensor.simplex_chat_last_message` | Last received message |
-| `sensor.simplex_chat_configured_contacts` | Number of contacts |
+| `binary_sensor.simplex_chat_connection` | WebSocket status (+ last CLI error as attributes) |
+| `sensor.simplex_chat_last_message` | Last **received** message, with sender/timestamp attributes |
+| `sensor.simplex_chat_known_contacts` | Number of chats known (configured + discovered) |
+| `sensor.simplex_chat_configured_contacts` | Number of chats configured by hand |
+| `sensor.simplex_chat_discovered_contacts` | Number of auto-discovered chats |
+| `sensor.simplex_chat_unread_messages` | Total unread messages |
+| `sensor.simplex_chat_last_error` | Last CLI error (diagnostic) |
+| `sensor.<contact>_last_message` | Last message of one contact/group |
+| `sensor.<contact>_unread_messages` | Unread counter of one contact/group |
+| `binary_sensor.<contact>_connected` | Connectivity of one contact/group |
+
+> **Entity ids and the 2.0 upgrade** — the integration device used to be
+> named *SimpleX Chat*, which Home Assistant slugifies to `simple_x_chat_*`.
+> The ids documented above (`simplex_chat_*`) have always been the ones in
+> the README and the dashboards, so before 2.0 the shipped dashboards could
+> not find their entities. Version 2.0 renames the device and migrates the
+> entity ids of existing installs automatically.
 
 ### Assist / LLM
 
@@ -182,6 +280,11 @@ Home Assistant
 
 The WebSocket client handles automatic reconnection, RPC response correlation (`corrId`), event dispatch, and redaction of sensitive links in logs.
 
+The **target registry** (`targets.py`) merges the manually configured chats
+and the auto-discovered ones into a single view, so every consumer —
+notify entities, sensors, the LLM tool, the dashboard cards — sees the same
+list. Discovery is runtime-only: it never rewrites the config entry.
+
 ---
 
 ## Troubleshooting
@@ -199,18 +302,31 @@ Checklist:
 
 1. Is `simplex-chat -p 5225` running?
 2. Is `binary_sensor.simplex_chat_connection` `on`?
-3. Any `chatCmdError` entries in the logs?
+3. Any `chatCmdError` entries in the logs? (`sensor.simplex_chat_last_error`)
 4. Is the invitation link still valid?
 
 ---
 
 ## Roadmap
 
-- [ ] Long-term user address
-- [ ] File / image sending
+- [x] Long-term user address
+- [x] File / image sending
+- [x] Auto-discovery of contacts and groups
+- [x] Per-contact sensors and binary sensors
+- [x] Lovelace cards
 - [ ] Multi-profile support
-- [ ] Lovelace card
-- [ ] Auto-discovery of contacts already known to the CLI
+- [ ] Chat / message search across conversations
+
+---
+
+## Tests
+
+The repository ships a dependency-free test suite that replays **real**
+SimpleX Chat CLI v7.1.4.0 frames through the integration's mapping:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
 
 ---
 
