@@ -196,6 +196,68 @@ class TestNormalizeEdgeCases(unittest.TestCase):
         self.assertEqual(result["alias"], "famille")
         self.assertEqual(result["direction"], "incoming")
 
+    def test_group_message_exposes_its_sender(self) -> None:
+        """A group bubble must show WHO wrote it, not just the group name.
+
+        `display_name` is the *chat* name; the sender lives in
+        `chatDir.groupMember` (CIDirection GroupRcv).
+        """
+        item = {
+            "chatInfo": {
+                "type": "group",
+                "groupInfo": {"groupId": 7, "localDisplayName": "Famille"},
+            },
+            "chatItem": {
+                "itemId": 10,
+                "meta": {
+                    "chatDir": {
+                        "type": "groupRcv",
+                        "groupMember": {
+                            "groupMemberId": 3,
+                            "localDisplayName": "Éric",
+                            "memberProfile": {"displayName": "Éric"},
+                        },
+                    },
+                    "itemText": "je suis là",
+                },
+                "content": {"type": "text"},
+            },
+        }
+        result = normalize_chat_item(item, {})
+        self.assertEqual(result["sender"], "Éric")
+        self.assertEqual(result["display_name"], "Famille")
+        self.assertEqual(result["type"], "group")
+
+    def test_direct_message_sender_is_the_contact(self) -> None:
+        item = {
+            "chatInfo": {
+                "type": "direct",
+                "contact": {"contactId": 3, "localDisplayName": "AC2N"},
+            },
+            "chatItem": {
+                "itemId": 11,
+                "meta": {"chatDir": {"type": "directRcv"}, "itemText": "salut"},
+                "content": {"type": "text"},
+            },
+        }
+        result = normalize_chat_item(item, {})
+        self.assertEqual(result["sender"], "AC2N")
+
+    def test_outgoing_message_has_no_sender(self) -> None:
+        item = {
+            "chatInfo": {
+                "type": "direct",
+                "contact": {"contactId": 3, "localDisplayName": "AC2N"},
+            },
+            "chatItem": {
+                "itemId": 12,
+                "meta": {"chatDir": {"type": "directSnd"}, "itemText": "pong"},
+                "content": {"type": "text"},
+            },
+        }
+        result = normalize_chat_item(item, {})
+        self.assertIsNone(result["sender"])
+
     def test_documented_chatdir_placement_is_supported(self) -> None:
         """The documented ChatItem type puts `chatDir` above `meta`."""
         item = {
