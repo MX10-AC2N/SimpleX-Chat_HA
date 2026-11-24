@@ -168,7 +168,7 @@ views:
         cards:
           - type: custom:mushroom-title-card
             title: Recipients
-            subtitle: notify.simplex_* · long-press = test message
+            subtitle: notify.simplex_chat_* · long-press = test message
 
           - type: custom:auto-entities
             card:
@@ -222,7 +222,7 @@ views:
             title: Quick guide
           - type: custom:mushroom-template-card
             primary: 1 · WS daemon
-            secondary: simplex-ws container or simplex-chat -p 5225
+            secondary: simplex-bridge container or simplex-chat -p 5225
             icon: mdi:numeric-1-circle
             icon_color: "#5C6BC0"
             layout: horizontal

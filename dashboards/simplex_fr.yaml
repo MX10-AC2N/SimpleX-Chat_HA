@@ -10,8 +10,10 @@
 # Les entity_id peuvent varier selon ta config. Adapte si besoin :
 #   binary_sensor.simplex_chat_connection
 #   sensor.simplex_chat_last_message
-#   sensor.simplex_chat_configured_contacts
-#   notify.simplex_<alias>
+#   sensor.simplex_chat_known_contacts
+#   sensor.simplex_chat_discovered_contacts
+#   sensor.simplex_chat_unread_messages
+#   notify.simplex_chat_<alias>
 
 title: SimpleX Chat
 views:
@@ -38,9 +40,27 @@ views:
             color: primary
 
           - type: tile
+            entity: sensor.simplex_chat_known_contacts
+            name: Contacts connus
+            icon: mdi:account-multiple
+            vertical: false
+
+          - type: tile
             entity: sensor.simplex_chat_configured_contacts
-            name: Contacts configurés
+            name: Configurés à la main
             icon: mdi:account-group
+            vertical: false
+
+          - type: tile
+            entity: sensor.simplex_chat_discovered_contacts
+            name: Découverts auto.
+            icon: mdi:radar
+            vertical: false
+
+          - type: tile
+            entity: sensor.simplex_chat_unread_messages
+            name: Non lus
+            icon: mdi:email-unread
             vertical: false
 
           - type: conditional
@@ -54,7 +74,7 @@ views:
                 ⚠️ **SimpleX n’est pas connecté**
 
                 Vérifie que le conteneur / CLI écoute bien, par ex. :
-                - Docker : `ws://simplex-ws:5225` ou `ws://IP_HOTE:5225`
+                - Docker : `ws://127.0.0.1:5225` (réseau host) ou `ws://IP_HOTE:5225`
                 - Voir [DOCKER.md](https://github.com/MX10-AC2N/SimpleX-Chat_HA/blob/main/DOCKER.md)
 
       # ---------- Dernier message ----------
@@ -117,7 +137,7 @@ views:
           - type: markdown
             content: |
               ### Envoyer un message
-              Utilise une entité `notify.simplex_<alias>` une fois les contacts ajoutés
+              Utilise une entité `notify.simplex_chat_<alias>` une fois les contacts ajoutés
               (**Configurer** l’intégration → Ajouter un contact).
 
           - type: entities

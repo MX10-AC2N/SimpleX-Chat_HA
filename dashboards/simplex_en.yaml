@@ -24,9 +24,27 @@ views:
             color: primary
 
           - type: tile
+            entity: sensor.simplex_chat_known_contacts
+            name: Known contacts
+            icon: mdi:account-multiple
+            vertical: false
+
+          - type: tile
             entity: sensor.simplex_chat_configured_contacts
-            name: Configured contacts
+            name: Manually configured
             icon: mdi:account-group
+            vertical: false
+
+          - type: tile
+            entity: sensor.simplex_chat_discovered_contacts
+            name: Auto-discovered
+            icon: mdi:radar
+            vertical: false
+
+          - type: tile
+            entity: sensor.simplex_chat_unread_messages
+            name: Unread
+            icon: mdi:email-unread
             vertical: false
 
           - type: conditional
@@ -40,7 +58,7 @@ views:
                 ⚠️ **SimpleX is not connected**
 
                 Check that the CLI/container is listening, e.g.:
-                - Docker: `ws://simplex-ws:5225` or `ws://HOST_IP:5225`
+                - Docker: `ws://127.0.0.1:5225` (host network) or `ws://HOST_IP:5225`
                 - See [DOCKER.md](https://github.com/MX10-AC2N/SimpleX-Chat_HA/blob/main/DOCKER.md)
 
       - type: grid

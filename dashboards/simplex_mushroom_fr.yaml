@@ -236,7 +236,7 @@ views:
         cards:
           - type: custom:mushroom-title-card
             title: Destinataires
-            subtitle: Entités notify.simplex_* · envoi rapide
+            subtitle: Entités notify.simplex_chat_* · envoi rapide
 
           - type: custom:auto-entities
             card:
@@ -338,7 +338,7 @@ views:
 
           - type: custom:mushroom-template-card
             primary: 1 · Daemon WS
-            secondary: Conteneur simplex-ws ou `simplex-chat -p 5225` · URL dans l’intégration
+            secondary: Conteneur simplex-bridge ou `simplex-chat -p 5225` · URL dans l’intégration
             icon: mdi:numeric-1-circle
             icon_color: "#5C6BC0"
             layout: horizontal
