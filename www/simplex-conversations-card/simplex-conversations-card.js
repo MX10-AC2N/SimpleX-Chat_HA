@@ -4,22 +4,31 @@
  * The "home screen" of a messaging app: one row per SimpleX contact/group
  * known to the bot, with an avatar, the last message preview, a timestamp
  * and an unread badge (when the CLI reports one — see note below). Tapping a
- * row navigates to a configured dashboard view (meant to hold a
- * `simplex-chat-card` for that same alias).
+ * row navigates to the chat view.
  *
  * Since the integration auto-discovers the CLI's contacts and groups, this
  * card lists every conversation without any manual setup — the rows appear
  * as soon as the bot knows the contact.
  *
+ * Navigation:
+ *   navigate_prefix: /simplex-chat   +   navigate_mode: hash (default)
+ *   → /simplex-chat#alice
+ *   The alias travels in the URL hash, so ONE generic chat view serves
+ *   every contact (see simplex-chat-card's "alias: auto" mode). The hash
+ *   also survives a page reload, unlike the router's path.
+ *
+ *   navigate_mode: path  → /simplex-chat/alice
+ *   Use it if your chat view lives on its own path per contact.
+ *
  * Backend requirement: the `simplex` integration's HA websocket command
- * "simplex/conversations" (v2.2+, now backed by `/chats all` since v2.3 so
+ * "simplex/conversations" (v2.2+, backed by `/chats all` since v2.3 so
  * households with more than 20 contacts all show up — see DOCKER.md).
  *
  * Note on unread badges: reads `chatStats.unreadCount`, confirmed present
  * on every chat preview (checked against the CLI's own Haskell source,
  * v7.1.4 — the version pinned in mx10-ac2n/simplex-bridge, see ws_api.py).
- * The `.get()` check is kept as plain defensive coding; when it's absent
- * the row just shows no badge rather than a guessed/wrong count.
+ * The `.get()` check is kept anyway as plain defensive coding; when it's
+ * absent the row just shows no badge rather than a guessed/wrong count.
  *
  * Install: copy this file to /config/www/simplex-conversations-card/ and
  * add it as a Lovelace resource:
@@ -29,9 +38,16 @@
  * Card config example:
  *   type: custom:simplex-conversations-card
  *   title: SimpleX
- *   navigate_prefix: /simplex-   # + alias, e.g. /simplex-family
+ *   navigate_prefix: /simplex-chat   # + alias, e.g. /simplex-chat#alice
+ *   navigate_mode: hash              # "hash" (default) or "path"
  * -----------------------------------------------------------------------
  */
+
+// Deterministic avatar colours: the same contact always gets the same hue.
+const AVATAR_COLORS = [
+  "#3fb37f", "#4a7fd4", "#c07a3f", "#a04a9e", "#c04a5e",
+  "#3f9ec0", "#7a9e3f", "#b58b2e", "#5c6bc0", "#3fae8f",
+];
 
 class SimplexConversationsCard extends HTMLElement {
   constructor() {
@@ -41,14 +57,18 @@ class SimplexConversationsCard extends HTMLElement {
     this._config = null;
     this._conversations = [];
     this._unsubscribe = null;
+    this._unsubscribeExtra = null;
     this._loaded = false;
+    this._filter = "";
   }
 
   setConfig(config) {
     this._config = {
       title: config.title || "SimpleX",
       navigate_prefix: config.navigate_prefix || null,
+      navigate_mode: config.navigate_mode || "hash",
       entry_id: config.entry_id || null,
+      show_search: config.show_search !== false,
     };
     this._renderShell();
   }
@@ -121,8 +141,16 @@ class SimplexConversationsCard extends HTMLElement {
         }
         .header {
           padding: 14px 16px 8px 16px; font-weight: 600; font-size: 1.1em;
-          color: #fff;
+          color: #fff; display: flex; align-items: center; justify-content: space-between;
         }
+        .header .count { font-size: 0.72em; font-weight: 400; opacity: 0.6; }
+        .search { padding: 0 12px 8px 12px; }
+        .search input {
+          width: 100%; box-sizing: border-box;
+          padding: 8px 12px; border-radius: 18px; border: none;
+          background: rgba(255,255,255,0.08); color: #eef3f5; font-size: 0.9em;
+        }
+        .search input::placeholder { color: #7d939a; }
         .rows { display: flex; flex-direction: column; }
         .row {
           display: flex; align-items: center; gap: 12px;
@@ -130,16 +158,25 @@ class SimplexConversationsCard extends HTMLElement {
           border-bottom: 1px solid rgba(255,255,255,0.05);
         }
         .row:hover { background: rgba(255,255,255,0.04); }
+        .row.unread { background: rgba(63,179,127,0.10); }
+        .row.unread .name { font-weight: 700; }
         .avatar {
           width: 44px; height: 44px; border-radius: 50%; flex: 0 0 auto;
-          background: linear-gradient(135deg, #3fb37f, #2f9e6f);
+          background: #2f9e6f;
           display: flex; align-items: center; justify-content: center;
           color: #fff; font-weight: 600;
+          position: relative;
         }
-        .avatar.group { background: linear-gradient(135deg, #4a7fd4, #3567b8); font-size: 1.25em; }
+        .avatar.group { font-size: 1.2em; }
+        .avatar .dot {
+          position: absolute; right: -1px; bottom: -1px;
+          width: 11px; height: 11px; border-radius: 50%;
+          background: #7d939a; border: 2px solid var(--simplex-bg, #0b141a);
+        }
+        .avatar .dot.on { background: #3fb37f; }
         .body { flex: 1 1 auto; min-width: 0; }
         .name-row { display: flex; justify-content: space-between; gap: 8px; }
-        .name { color: #eef3f5; font-weight: 600; font-size: 0.97em; }
+        .name { color: #eef3f5; font-weight: 600; font-size: 0.97em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .time { color: #7d939a; font-size: 0.75em; flex: 0 0 auto; }
         .preview-row { display: flex; justify-content: space-between; gap: 8px; margin-top: 2px; }
         .preview {
@@ -156,10 +193,24 @@ class SimplexConversationsCard extends HTMLElement {
         .error { color: #e08a8a; }
       </style>
       <ha-card>
-        <div class="header">${this._escape(this._config.title)}</div>
+        <div class="header">
+          <span>${this._escape(this._config.title)}</span>
+          <span class="count" id="count"></span>
+        </div>
+        ${this._config.show_search
+          ? `<div class="search"><input id="search" type="text" placeholder="Rechercher…" /></div>`
+          : ""}
         <div class="rows" id="rows"><div class="empty">Chargement…</div></div>
       </ha-card>
     `;
+
+    const search = root.getElementById("search");
+    if (search) {
+      search.addEventListener("input", (e) => {
+        this._filter = (e.target.value || "").trim().toLowerCase();
+        this._renderRows();
+      });
+    }
   }
 
   _renderError(message) {
@@ -167,23 +218,46 @@ class SimplexConversationsCard extends HTMLElement {
     if (el) el.innerHTML = `<div class="error">${this._escape(message)}</div>`;
   }
 
-  _renderRows() {
-    const el = this.shadowRoot.getElementById("rows");
-    if (!el) return;
-    if (!this._conversations.length) {
-      el.innerHTML = this._loaded
-        ? '<div class="empty">Aucun contact pour l’instant. Les contacts et groupes du bot SimpleX apparaissent ici automatiquement.</div>'
-        : '<div class="empty">Chargement…</div>';
-      return;
-    }
-
+  _visibleRows() {
     // Most recent conversation first.
     const rows = this._conversations.slice().sort((a, b) => {
-      const ta = a.last_message && a.last_message.timestamp ? a.last_message.timestamp : 0;
-      const tb = b.last_message && b.last_message.timestamp ? b.last_message.timestamp : 0;
+      const ta = this._timestamp(a);
+      const tb = this._timestamp(b);
       if (tb !== ta) return tb - ta;
       return String(a.name || "").localeCompare(String(b.name || ""));
     });
+    if (!this._filter) return rows;
+    return rows.filter((c) =>
+      `${c.name || ""} ${c.alias || ""} ${c.chat_ref || ""}`
+        .toLowerCase()
+        .includes(this._filter)
+    );
+  }
+
+  _renderRows() {
+    const el = this.shadowRoot.getElementById("rows");
+    if (!el) return;
+    const rows = this._visibleRows();
+
+    const countEl = this.shadowRoot.getElementById("count");
+    if (countEl) {
+      const unread = this._conversations.reduce(
+        (sum, c) => sum + (c.unread_count > 0 ? c.unread_count : 0),
+        0
+      );
+      countEl.textContent = unread
+        ? `${this._conversations.length} · ${unread} non-lus`
+        : `${this._conversations.length}`;
+    }
+
+    if (!rows.length) {
+      el.innerHTML = this._loaded
+        ? (this._filter
+            ? '<div class="empty">Aucun contact ne correspond à la recherche.</div>'
+            : '<div class="empty">Aucun contact pour l’instant. Les contacts et groupes du bot SimpleX apparaissent ici automatiquement.</div>')
+        : '<div class="empty">Chargement…</div>';
+      return;
+    }
 
     el.innerHTML = rows
       .map((c) => {
@@ -199,16 +273,15 @@ class SimplexConversationsCard extends HTMLElement {
           if (last.direction === "outgoing") preview = `↩ ${preview}`;
         }
         const time = last ? this._formatTime(last.timestamp) : "";
-        const badge =
-          c.unread_count && c.unread_count > 0
-            ? `<div class="badge">${c.unread_count > 99 ? "99+" : c.unread_count}</div>`
-            : "";
-        const avatar =
-          c.type === "group"
-            ? '<div class="avatar group">👥</div>'
-            : `<div class="avatar">${this._initial(c.name)}</div>`;
+        const unread = c.unread_count && c.unread_count > 0;
+        const badge = unread
+          ? `<div class="badge">${c.unread_count > 99 ? "99+" : c.unread_count}</div>`
+          : "";
+        const dot = `<span class="dot${c.connected ? " on" : ""}"></span>`;
+        const face = c.type === "group" ? "👥" : this._initial(c.name);
+        const avatar = `<div class="avatar${c.type === "group" ? " group" : ""}" style="background:${this._avatarColor(c.alias)}">${face}${dot}</div>`;
         return `
-          <div class="row" data-alias="${this._escape(c.alias)}">
+          <div class="row${unread ? " unread" : ""}" data-alias="${this._escape(c.alias)}">
             ${avatar}
             <div class="body">
               <div class="name-row">
@@ -229,9 +302,38 @@ class SimplexConversationsCard extends HTMLElement {
     });
   }
 
+  _timestamp(conversation) {
+    // The CLI returns ISO-8601 strings; Date.getTime() makes them sortable.
+    const ts = conversation && conversation.last_message && conversation.last_message.timestamp;
+    if (!ts) return 0;
+    const value = new Date(ts).getTime();
+    return Number.isNaN(value) ? 0 : value;
+  }
+
+  _avatarColor(alias) {
+    const key = String(alias || "");
+    let hash = 0;
+    for (let i = 0; i < key.length; i++) {
+      hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+    }
+    return AVATAR_COLORS[hash % AVATAR_COLORS.length];
+  }
+
   _onRowClick(alias) {
-    if (!this._config.navigate_prefix) return;
-    const path = `${this._config.navigate_prefix}${alias}`;
+    if (!this._config.navigate_prefix || !alias) return;
+    // Belt-and-braces: Home Assistant owns the router and may normalise the
+    // URL (dropping the hash). The sessionStorage copy is the fallback the
+    // chat card reads when the hash is gone.
+    try {
+      window.sessionStorage.setItem("simplex_chat_alias", alias);
+    } catch (e) {
+      /* private mode: the hash alone will do */
+    }
+    const base = this._config.navigate_prefix.replace(/\/+$/, "");
+    const path =
+      this._config.navigate_mode === "path"
+        ? `${base}/${alias}`
+        : `${base}#${encodeURIComponent(alias)}`;
     this.dispatchEvent(
       new CustomEvent("location-changed", { bubbles: true, composed: true, detail: { replace: false } })
     );
@@ -245,9 +347,13 @@ class SimplexConversationsCard extends HTMLElement {
     if (Number.isNaN(d.getTime())) return "";
     const now = new Date();
     const sameDay = d.toDateString() === now.toDateString();
-    return sameDay
-      ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-      : d.toLocaleDateString([], { day: "2-digit", month: "2-digit" });
+    if (sameDay) {
+      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
+    const yesterday = new Date();
+    yesterday.setDate(now.getDate() - 1);
+    if (d.toDateString() === yesterday.toDateString()) return "Hier";
+    return d.toLocaleDateString([], { day: "2-digit", month: "2-digit" });
   }
 
   _escape(str) {
