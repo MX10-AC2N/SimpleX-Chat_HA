@@ -20,6 +20,7 @@ import json
 import os
 import sys
 import unittest
+from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -34,15 +35,25 @@ from custom_components.simplex import (  # noqa: E402
     legacy_entity_id_to_new,
     normalize_chat_item,
 )
+from custom_components.simplex.const import UPLOAD_EXTENSIONS  # noqa: E402
+from custom_components.simplex.http import _kind_for_suffix  # noqa: E402
 from custom_components.simplex.mapping import (  # noqa: E402
     pending_incoming_file_id,
     resolve_media_url,
 )
+from custom_components.simplex.stats import (  # noqa: E402
+    daily_series,
+    parse_timestamp,
+    record_message,
+    seed_from_items,
+)
+from custom_components.simplex.stats import summary as activity_summary  # noqa: E402
 from custom_components.simplex.targets import (  # noqa: E402
     SimplexTargetRegistry,
     chat_ref_key,
     sanitize_alias,
 )
+from custom_components.simplex.websocket_client import SimplexWsClient  # noqa: E402
 
 # --------------------------------------------------------------------------
 # Real CLI v7.1.4.0 frames
@@ -380,6 +391,131 @@ class TestEntityIdMigration(unittest.TestCase):
                 entity_id,
                 f"{entity_id} uses the legacy slug, it would not resolve",
             )
+
+
+class TestActivityStats(unittest.TestCase):
+    """The activity counters are built from the chat history."""
+
+    def _target(self):
+        registry = SimplexTargetRegistry()
+        target, _ = registry.upsert_discovered("@3", "AC2N", "contact")
+        return target
+
+    def test_parse_timestamp(self) -> None:
+        parsed = parse_timestamp("2026-11-24T07:23:57.123Z")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.year, 2026)
+        self.assertEqual(parsed.month, 11)
+        self.assertEqual(parsed.day, 24)
+
+    def test_parse_timestamp_handles_garbage(self) -> None:
+        self.assertIsNone(parse_timestamp(None))
+        self.assertIsNone(parse_timestamp(""))
+        self.assertIsNone(parse_timestamp("not a date"))
+
+    def test_record_message_counts_by_day(self) -> None:
+        target = self._target()
+        today = date.today().isoformat()
+        record_message(target, f"{today}T10:00:00Z")
+        record_message(target, f"{today}T11:00:00Z")
+        self.assertEqual(target.daily_counts.get(today), 2)
+        self.assertEqual(target.messages_total, 2)
+
+    def test_seed_from_items_counts_the_history(self) -> None:
+        target = self._target()
+        today = date.today().isoformat()
+        items = [
+            {"meta": {"itemTs": f"{today}T09:00:00Z"}},
+            {"meta": {"itemTs": f"{today}T09:30:00Z"}},
+            {"meta": {}},
+        ]
+        counted = seed_from_items(target, items)
+        # Every message is counted; only the ones with a usable timestamp
+        # land in a day bucket.
+        self.assertEqual(counted, 3)
+        self.assertEqual(target.daily_counts.get(today), 2)
+        self.assertEqual(target.messages_total, 3)
+
+    def test_seed_from_items_handles_the_wrapped_shape(self) -> None:
+        """`/chats` and `/_get chat` wrap every item.
+
+        The timestamp lives in `chatItem.meta.itemTs` — reading `meta` off
+        the wrapper would silently yield an empty dict and every message
+        would land in no day bucket.
+        """
+        target = self._target()
+        today = date.today().isoformat()
+        items = [
+            {
+                "chatInfo": {"type": "direct", "contact": {"contactId": 3}},
+                "chatItem": {
+                    "itemId": 17,
+                    "meta": {
+                        "chatDir": {"type": "directRcv"},
+                        "itemTs": f"{today}T10:00:00Z",
+                    },
+                    "content": {"type": "text"},
+                },
+            }
+        ]
+        counted = seed_from_items(target, items)
+        self.assertEqual(counted, 1)
+        self.assertEqual(target.daily_counts.get(today), 1)
+        self.assertEqual(target.messages_total, 1)
+
+    def test_daily_series_covers_every_day(self) -> None:
+        target = self._target()
+        today = date.today().isoformat()
+        record_message(target, f"{today}T10:00:00Z")
+        series = daily_series([target], 7)
+        self.assertEqual(len(series), 7)
+        self.assertEqual(series[-1]["date"], today)
+        self.assertEqual(series[-1]["count"], 1)
+        self.assertEqual(series[0]["count"], 0)
+
+    def test_summary(self) -> None:
+        target = self._target()
+        today = date.today().isoformat()
+        record_message(target, f"{today}T10:00:00Z")
+        summary = activity_summary([target], 30)
+        self.assertEqual(summary["total_today"], 1)
+        self.assertEqual(summary["total_window"], 1)
+        self.assertEqual(summary["total_all_time"], 1)
+        self.assertEqual(len(summary["daily"]), 30)
+        self.assertEqual(summary["by_chat"][0]["alias"], "ac2n")
+        self.assertEqual(summary["by_chat"][0]["count"], 1)
+
+
+class TestContentType(unittest.TestCase):
+    """Pictures must be sent as images, not as plain attachments."""
+
+    def test_images_are_sent_as_images(self) -> None:
+        for name in ("photo.jpg", "photo.JPEG", "shot.png", "a.webp"):
+            self.assertEqual(
+                SimplexWsClient.content_type_for(name), "image", name
+            )
+
+    def test_other_files_stay_files(self) -> None:
+        for name in ("clip.ogg", "clip.webm", "doc.pdf", "noext"):
+            self.assertEqual(
+                SimplexWsClient.content_type_for(name), "file", name
+            )
+
+
+class TestUploadKinds(unittest.TestCase):
+    """The upload endpoint must accept pictures and infer their kind."""
+
+    def test_kind_is_inferred_from_the_extension(self) -> None:
+        self.assertEqual(_kind_for_suffix(".jpg"), "image")
+        self.assertEqual(_kind_for_suffix(".png"), "image")
+        self.assertEqual(_kind_for_suffix(".ogg"), "audio")
+        self.assertEqual(_kind_for_suffix(".webm"), "audio")
+        self.assertEqual(_kind_for_suffix(".bin"), None)
+
+    def test_images_are_an_allowed_kind(self) -> None:
+        self.assertIn("image", UPLOAD_EXTENSIONS)
+        self.assertIn(".jpg", UPLOAD_EXTENSIONS["image"])
+        self.assertIn(".png", UPLOAD_EXTENSIONS["image"])
 
 
 class TestAliasHelpers(unittest.TestCase):
