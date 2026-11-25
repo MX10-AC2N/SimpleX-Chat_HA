@@ -50,6 +50,8 @@ class SimplexChatCard extends HTMLElement {
     this._config = null;
     this._messages = [];
     this._unsubscribe = null;
+    this._stateUnsub = null;
+    this._subscribed = false;
     this._loaded = false;
     this._hasMore = false;
     this._loadingMore = false;
@@ -82,6 +84,12 @@ class SimplexChatCard extends HTMLElement {
     this._renderShell();
     if (this._config.dynamic) {
       this._bindLocation();
+    } else {
+      this._unbindLocation();
+    }
+    if (this._loaded) {
+      this._renderMessages(true);
+      this._updateHeader();
     }
   }
 
@@ -103,16 +111,27 @@ class SimplexChatCard extends HTMLElement {
     return 8;
   }
 
+  connectedCallback() {
+    // Home Assistant detaches/re-attaches cards (view switch, edit mode).
+    // `set hass` only subscribes the first time, so without this a re-attached
+    // card stayed deaf to new messages.
+    if (this._hass) {
+      this._subscribe();
+      if (this._config && this._config.dynamic) this._bindLocation();
+    }
+  }
+
   disconnectedCallback() {
+    this._subscribed = false;
     if (this._unsubscribe) {
       this._unsubscribe();
       this._unsubscribe = null;
     }
-    if (this._locationHandler) {
-      window.removeEventListener("popstate", this._locationHandler);
-      window.removeEventListener("hashchange", this._locationHandler);
-      this._locationHandler = null;
+    if (this._stateUnsub) {
+      this._stateUnsub();
+      this._stateUnsub = null;
     }
+    this._unbindLocation();
     if (this._timerHandle) window.clearInterval(this._timerHandle);
     if (this._stream) this._stream.getTracks().forEach((t) => t.stop());
   }
@@ -144,7 +163,17 @@ class SimplexChatCard extends HTMLElement {
     return segments.length ? decodeURIComponent(segments[segments.length - 1]) : null;
   }
 
+  _unbindLocation() {
+    if (!this._locationHandler) return;
+    window.removeEventListener("popstate", this._locationHandler);
+    window.removeEventListener("hashchange", this._locationHandler);
+    window.removeEventListener("location-changed", this._locationHandler);
+    this._locationHandler = null;
+  }
+
   _bindLocation() {
+    // setConfig() can run several times; never stack listeners.
+    this._unbindLocation();
     this._locationHandler = () => {
       const alias = this._aliasFromLocation();
       if (alias && alias !== this._alias) {
@@ -332,6 +361,8 @@ class SimplexChatCard extends HTMLElement {
   }
 
   _subscribe() {
+    if (this._subscribed || !this._hass) return;
+    this._subscribed = true;
     this._hass.connection
       .subscribeEvents((event) => {
         const data = event.data || {};
@@ -344,6 +375,7 @@ class SimplexChatCard extends HTMLElement {
         }
       }, "simplex_message_received")
       .then((unsub) => {
+        if (!this._subscribed) return unsub(); // detached before it resolved
         this._unsubscribe = unsub;
       })
       .catch((err) => {
@@ -355,6 +387,7 @@ class SimplexChatCard extends HTMLElement {
     this._hass.connection
       .subscribeEvents(() => this._updateHeader(), "state_changed")
       .then((unsub) => {
+        if (!this._subscribed) return unsub();
         this._stateUnsub = unsub;
       })
       .catch(() => {});
@@ -367,6 +400,7 @@ class SimplexChatCard extends HTMLElement {
       await this._hass.callService("simplex", "mark_read", {
         alias: this._alias,
         item_ids: ids,
+        ...(this._config.entry_id ? { entry_id: this._config.entry_id } : {}),
       });
       this._updateHeader();
     } catch (err) {
@@ -729,6 +763,7 @@ class SimplexChatCard extends HTMLElement {
       await this._hass.callService("simplex", "send_message", {
         alias: this._alias,
         message,
+        ...(this._config.entry_id ? { entry_id: this._config.entry_id } : {}),
       });
       input.value = "";
       this._setStatus(null);
