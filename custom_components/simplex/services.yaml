@@ -174,3 +174,50 @@ mark_read:
       required: false
       selector:
         text:
+
+search:
+  name: Search messages
+  description: Search the message text across every conversation at once.
+  fields:
+    query:
+      name: Search text
+      description: The text to look for in the messages.
+      required: true
+      example: "dinner"
+      selector:
+        text:
+    limit:
+      name: Maximum results
+      description: Maximum number of matching messages to return.
+      required: false
+      default: 50
+      selector:
+        number:
+          min: 1
+          max: 200
+    entry_id:
+      name: Config entry ID
+      description: Optional. Required only if you have multiple SimpleX integrations.
+      required: false
+      selector:
+        text:
+
+activity_stats:
+  name: Activity statistics
+  description: Return the message activity — a daily series and a per-chat breakdown.
+  fields:
+    days:
+      name: Window (days)
+      description: Size of the window the statistics cover.
+      required: false
+      default: 30
+      selector:
+        number:
+          min: 1
+          max: 365
+    entry_id:
+      name: Config entry ID
+      description: Optional. Required only if you have multiple SimpleX integrations.
+      required: false
+      selector:
+        text:

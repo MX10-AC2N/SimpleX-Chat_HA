@@ -24,6 +24,7 @@ from homeassistant.exceptions import HomeAssistantError
 from .const import (
     DEFAULT_INBOX_DIR,
     DEFAULT_OUTBOX_DIR,
+    DEFAULT_UPLOAD_EXTENSION,
     DOMAIN,
     ERROR_FILE_TOO_LARGE,
     ERROR_UNKNOWN_ALIAS,
@@ -39,13 +40,28 @@ _LOGGER = logging.getLogger(__name__)
 _READ_CHUNK = 1024 * 1024  # 1 MiB
 
 
+def _kind_for_suffix(suffix: str) -> str | None:
+    """Return the attachment kind matching a file extension.
+
+    Used when the uploader did not state a kind — a picture picked from
+    the gallery comes with its own file name.
+    """
+    if not suffix:
+        return None
+    for kind, extensions in UPLOAD_EXTENSIONS.items():
+        if suffix in extensions:
+            return kind
+    return None
+
+
 class SimplexUploadView(HomeAssistantView):
     """Receive a recorded audio/video clip from a tablet card and forward it to SimpleX.
 
     POST multipart/form-data to /api/simplex/upload with fields:
       - alias     : configured SimpleX alias to send to (required)
-      - kind      : "audio" or "video" (required)
-      - file      : the recorded blob (required)
+      - kind      : "audio", "video" or "image" (optional — inferred from
+                    the file extension when omitted)
+      - file      : the recorded blob / the picked picture (required)
       - entry_id  : optional, only needed with several SimpleX entries configured
     """
 
@@ -72,12 +88,39 @@ class SimplexUploadView(HomeAssistantView):
 
         if not alias:
             return web.json_response({"success": False, "error": "missing 'alias'"}, status=400)
-        if kind not in UPLOAD_EXTENSIONS:
-            return web.json_response(
-                {"success": False, "error": "kind must be 'audio' or 'video'"}, status=400
-            )
         if file_field is None or not hasattr(file_field, "file"):
             return web.json_response({"success": False, "error": "missing 'file'"}, status=400)
+
+        # The extension of the uploaded file decides the kind when the
+        # caller did not state one — a picture picked from the gallery
+        # carries its own name.
+        original_name = str(getattr(file_field, "filename", "") or "")
+        suffix = Path(original_name).suffix.lower()
+        if not kind:
+            kind = _kind_for_suffix(suffix) or ""
+        if kind not in UPLOAD_EXTENSIONS:
+            return web.json_response(
+                {
+                    "success": False,
+                    "error": (
+                        "kind must be 'audio', 'video' or 'image'"
+                        + (f" (got '{kind}')" if kind else "")
+                    ),
+                },
+                status=400,
+            )
+        allowed = UPLOAD_EXTENSIONS[kind]
+        if suffix and suffix not in allowed:
+            return web.json_response(
+                {
+                    "success": False,
+                    "error": (
+                        f"'{suffix}' is not a valid {kind} extension "
+                        f"(allowed: {', '.join(allowed)})"
+                    ),
+                },
+                status=400,
+            )
 
         entry_data = _find_entry_for_alias(hass, alias, entry_id)
         if entry_data is None:
@@ -86,8 +129,12 @@ class SimplexUploadView(HomeAssistantView):
             )
 
         outbox_dir = Path(entry_data.get("outbox_dir", DEFAULT_OUTBOX_DIR))
-        ext = UPLOAD_EXTENSIONS[kind]
-        filename = f"{int(time.time())}_{secrets.token_hex(4)}{ext}"
+        ext = suffix if suffix in allowed else DEFAULT_UPLOAD_EXTENSION[kind]
+        # Keep a readable name: the CLI shows it to the recipient.
+        stem = "".join(
+            ch for ch in Path(original_name).stem if ch.isalnum() or ch in "-_"
+        )[:40]
+        filename = f"{stem or 'media'}_{int(time.time())}_{secrets.token_hex(4)}{ext}"
         dest_path = outbox_dir / filename
 
         def _write() -> int:
@@ -125,11 +172,13 @@ class SimplexUploadView(HomeAssistantView):
             )
 
         try:
-            await entry_data["client"].send_file(chat_ref, str(dest_path))
+            await entry_data["client"].send_file(
+                chat_ref, str(dest_path), content_type=kind
+            )
         except SimplexWsError as exc:
             return web.json_response({"success": False, "error": str(exc)}, status=502)
 
-        return web.json_response({"success": True, "file": filename})
+        return web.json_response({"success": True, "file": filename, "kind": kind})
 
 
 class SimplexMediaView(HomeAssistantView):

@@ -80,6 +80,71 @@ class SimplexSendMessageTool(llm.Tool):
             }
 
 
+class SimplexSearchTool(llm.Tool):
+    """Tool that lets an LLM search the message history of every chat."""
+
+    def __init__(self, entry_id: str) -> None:
+        self._entry_id = entry_id
+        self.name = "search_simplex_messages"
+        self.description = (
+            "Search the SimpleX Chat message history across every "
+            "conversation (contacts and groups). Use it to find when "
+            "something was said, by whom, or in which conversation."
+        )
+        self.parameters = vol.Schema(
+            {
+                vol.Required(
+                    "query",
+                    description="The text to look for in the messages",
+                ): str,
+                vol.Optional(
+                    "limit",
+                    description="Maximum number of results (default 20)",
+                ): vol.All(int, vol.Range(min=1, max=100)),
+            }
+        )
+
+    async def async_call(
+        self,
+        hass: HomeAssistant,
+        tool_input: llm.ToolInput,
+        llm_context: llm.LLMContext,
+    ) -> dict[str, Any]:
+        data = self.parameters(tool_input.tool_args)
+        query = data["query"].strip()
+        limit = data.get("limit", 20)
+        if not query:
+            return {"success": False, "error": "query is required"}
+
+        domain_data = hass.data[DOMAIN][self._entry_id]
+        client = domain_data["client"]
+        try:
+            raw_items = await client.search_items(query, limit=limit)
+        except SimplexWsError as exc:
+            return {"success": False, "error": f"Search failed: {exc.reason or exc.message}"}
+
+        from . import normalize_chat_item
+
+        targets = domain_data.get("targets", {})
+        results = []
+        for raw in raw_items:
+            normalized = normalize_chat_item(raw, targets, domain_data.get("inbox_dir"))
+            if normalized is None:
+                continue
+            results.append(
+                {
+                    "chat": normalized.get("alias") or normalized.get("display_name"),
+                    "chat_ref": normalized.get("chat_ref"),
+                    "from": normalized.get("sender") or normalized.get("display_name"),
+                    "text": normalized.get("text"),
+                    "timestamp": normalized.get("timestamp"),
+                    "direction": normalized.get("direction"),
+                }
+            )
+
+        return {"success": True, "count": len(results), "results": results}
+
+
 class SimplexAPI(llm.API):
     """Exposes the send_simplex_message tool to Assist / LLMs."""
 
@@ -98,16 +163,19 @@ class SimplexAPI(llm.API):
             self.hass.data[DOMAIN][self._entry_id]["targets"].keys()
         )
         tool = SimplexSendMessageTool(self._entry_id, aliases)
+        search_tool = SimplexSearchTool(self._entry_id)
         prompt = (
             "You can send private messages through SimpleX Chat using the "
             "send_simplex_message tool. Always use one of the configured "
-            f"aliases: {', '.join(aliases) or '(none configured yet)'}."
+            f"aliases: {', '.join(aliases) or '(none configured yet)'}. "
+            "You can also look for past messages in every conversation with "
+            "the search_simplex_messages tool."
         )
         return llm.APIInstance(
             api=self,
             api_prompt=prompt,
             llm_context=llm_context,
-            tools=[tool],
+            tools=[tool, search_tool],
         )
 
 

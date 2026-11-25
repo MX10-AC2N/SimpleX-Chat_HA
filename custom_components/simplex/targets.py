@@ -81,6 +81,9 @@ class SimplexTarget:
     last_timestamp: Any = None
     last_direction: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
+    # Activity counters: "YYYY-MM-DD" -> number of received messages.
+    daily_counts: dict[str, int] = field(default_factory=dict)
+    messages_total: int = 0
 
     def as_option(self) -> dict[str, Any]:
         """Return the historic ``targets`` option shape for this target."""

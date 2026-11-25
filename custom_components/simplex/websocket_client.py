@@ -8,6 +8,7 @@ import logging
 import secrets
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from aiohttp import ClientError, ClientSession, ClientWebSocketResponse, WSMsgType
@@ -16,6 +17,11 @@ _LOGGER = logging.getLogger(__name__)
 
 RECONNECT_MIN_DELAY = 1.0
 RECONNECT_MAX_DELAY = 60.0
+
+# Suffixes sent as an inline "image" instead of a plain file attachment.
+IMAGE_SUFFIXES = frozenset(
+    {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".heic", ".heif"}
+)
 
 
 class SimplexWsError(Exception):
@@ -564,13 +570,26 @@ class SimplexWsClient:
             return await self._rpc_cmd(legacy_cmd, timeout=timeout)
 
     async def send_file(
-        self, chat_ref: str, file_path: str, text: str = "", timeout: float = 120.0
+        self,
+        chat_ref: str,
+        file_path: str,
+        text: str = "",
+        content_type: str | None = None,
+        timeout: float = 120.0,
     ) -> dict[str, Any]:
-        """Send a local file (APISendMessages + fileSource, with /f fallback)."""
+        """Send a local file (APISendMessages + fileSource, with /f fallback).
+
+        `content_type` is the SimpleX content type of the attachment:
+        "image" for a picture, "file" for anything else. The CLI v7
+        `MsgContent` union only knows text/link/image/video/voice/file, and
+        only "image" can be rendered inline by the receiving clients — a
+        JPEG sent as "file" arrives as a plain attachment.
+        """
+        msg_type = content_type or self.content_type_for(file_path)
         composed = [
             {
                 "fileSource": {"filePath": file_path},
-                "msgContent": {"type": "file", "text": text or ""},
+                "msgContent": {"type": msg_type, "text": text or ""},
                 "mentions": {},
             }
         ]
@@ -581,6 +600,50 @@ class SimplexWsClient:
             _LOGGER.debug("send_file: modern /_send failed (%s), trying classic /f", err)
             safe_path = file_path.replace('"', '\\"')
             return await self._rpc_cmd(f'/f {chat_ref} "{safe_path}"', timeout=timeout)
+
+    @staticmethod
+    def content_type_for(file_path: str) -> str:
+        """Return the SimpleX content type to use for a local file.
+
+        Pictures are sent as "image" so they are displayed inline by the
+        SimpleX clients; everything else goes as a plain "file" attachment.
+        """
+        suffix = Path(file_path).suffix.lower()
+        if suffix in IMAGE_SUFFIXES:
+            return "image"
+        return "file"
+
+    async def search_items(
+        self, query: str, limit: int = 50, timeout: float = 30.0
+    ) -> list[dict[str, Any]]:
+        """Search every conversation at once.
+
+        Official Bot API (v7.1) — `APIGetChatItems`:
+
+            /_get items count=<limit> search=<text>
+
+        Response `ChatItems`:
+
+            {"type": "chatItems", "user": {...}, "chatItems": [AChatItem]}
+
+        Each `AChatItem` is `{"chatInfo": {...}, "chatItem": {...}}`, so a
+        result carries both the conversation it belongs to and the item
+        itself — exactly what a cross-conversation search needs.
+
+        The search text is parsed by the CLI with `takeByteString` (the rest
+        of the line), so spaces are supported; newlines are not, hence the
+        sanitisation below.
+        """
+        cleaned = " ".join((query or "").split())
+        if not cleaned:
+            return []
+        cmd = f"/_get items count={int(limit)} search={cleaned}"
+        resp = await self._rpc_cmd(cmd, timeout=timeout)
+        for key in ("chatItems", "items"):
+            items = resp.get(key)
+            if isinstance(items, list):
+                return items
+        return []
 
     async def list_contacts(self, timeout: float = 15.0) -> list[dict[str, Any]]:
         """Return the list of contacts for the active user.

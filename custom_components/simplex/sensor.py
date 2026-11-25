@@ -20,14 +20,23 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
     DOMAIN,
+    EVENT_ACTIVITY_UPDATED,
     EVENT_ERROR,
     EVENT_MESSAGE_RECEIVED,
     EVENT_TARGETS_UPDATED,
 )
 from .entity_base import contact_device_info, contact_unique_id, main_device_info
+from .stats import summary as activity_summary
 from .targets import SimplexTarget, SimplexTargetRegistry, registry_for
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _window(registry: SimplexTargetRegistry | None, days: int) -> int:
+    """Number of messages received over the last ``days`` days."""
+    if registry is None:
+        return 0
+    return activity_summary(registry.targets, days)["total_window"]
 
 
 async def async_setup_entry(
@@ -44,6 +53,8 @@ async def async_setup_entry(
         SimplexKnownCountSensor(hass, config_entry),
         SimplexDiscoveredCountSensor(hass, config_entry),
         SimplexUnreadTotalSensor(hass, config_entry),
+        SimplexMessagesTodaySensor(hass, config_entry),
+        SimplexMessagesWeekSensor(hass, config_entry),
         SimplexLastErrorSensor(hass, config_entry),
     ]
     async_add_entities(entities)
@@ -59,6 +70,7 @@ async def async_setup_entry(
             [
                 SimplexContactLastMessageSensor(hass, config_entry, target),
                 SimplexContactUnreadSensor(hass, config_entry, target),
+                SimplexContactMessagesSensor(hass, config_entry, target),
             ]
         )
 
@@ -84,6 +96,9 @@ class _RegistrySensor(SensorEntity):
 
     _attr_should_poll = False
     _attr_has_entity_name = True
+    # Sensors that also depend on the activity counters listen to the
+    # activity event.
+    _activity_aware = False
 
     def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
         self.hass = hass
@@ -106,6 +121,11 @@ class _RegistrySensor(SensorEntity):
         self.async_on_remove(
             self.hass.bus.async_listen(EVENT_TARGETS_UPDATED, _refresh)
         )
+
+        if self._activity_aware:
+            self.async_on_remove(
+                self.hass.bus.async_listen(EVENT_ACTIVITY_UPDATED, _refresh)
+            )
 
 
 class SimplexLastMessageSensor(_RegistrySensor):
@@ -275,6 +295,68 @@ class SimplexUnreadTotalSensor(_RegistrySensor):
         )
 
 
+class SimplexMessagesTodaySensor(_RegistrySensor):
+    """Number of messages received today, across every chat."""
+
+    _activity_aware = True
+    _attr_name = "Messages today"
+    _attr_icon = "mdi:message-text-outline"
+    _attr_native_unit_of_measurement = "messages"
+    _attr_state_class = "total"
+
+    def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
+        super().__init__(hass, config_entry)
+        self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}_messages_today"
+
+    @property
+    def native_value(self) -> int:
+        registry = self._registry
+        if registry is None:
+            return 0
+        return activity_summary(registry.targets, 1)["total_today"]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        registry = self._registry
+        if registry is None:
+            return {}
+        summary = activity_summary(registry.targets, 30)
+        return {
+            "today": summary["total_today"],
+            "last_7_days": _window(registry, 7),
+            "all_time": summary["total_all_time"],
+            "daily": summary["daily"][-7:],
+        }
+
+
+class SimplexMessagesWeekSensor(_RegistrySensor):
+    """Number of messages received over the last seven days."""
+
+    _activity_aware = True
+    _attr_name = "Messages this week"
+    _attr_icon = "mdi:chart-line"
+    _attr_native_unit_of_measurement = "messages"
+    _attr_state_class = "total"
+
+    def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
+        super().__init__(hass, config_entry)
+        self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}_messages_week"
+
+    @property
+    def native_value(self) -> int:
+        registry = self._registry
+        if registry is None:
+            return 0
+        return _window(registry, 7)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        registry = self._registry
+        if registry is None:
+            return {}
+        return {"daily": activity_summary(registry.targets, 7)["daily"]}
+
+
 class SimplexLastErrorSensor(_RegistrySensor):
     """The last error reported by the SimpleX CLI (chatCmdError)."""
 
@@ -350,6 +432,52 @@ class SimplexContactLastMessageSensor(_RegistrySensor):
                 "edited": event.data.get("edited"),
                 "file": event.data.get("file"),
             }
+            self.async_write_ha_state()
+
+        self.async_on_remove(
+            self.hass.bus.async_listen(EVENT_MESSAGE_RECEIVED, _handle_event)
+        )
+
+
+class SimplexContactMessagesSensor(_RegistrySensor):
+    """Messages received today on one contact/group."""
+
+    _activity_aware = True
+    _attr_name = "Messages today"
+    _attr_icon = "mdi:message-text-outline"
+    _attr_native_unit_of_measurement = "messages"
+    _attr_state_class = "total"
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        config_entry: ConfigEntry,
+        target: SimplexTarget,
+    ) -> None:
+        super().__init__(hass, config_entry)
+        self._target = target
+        self._attr_unique_id = contact_unique_id(config_entry, target, "messages")
+        self._attr_device_info = contact_device_info(config_entry, target)
+
+    @property
+    def native_value(self) -> int:
+        registry = self._registry
+        target = registry.by_ref(self._target.chat_ref) if registry else None
+        if target is None:
+            return 0
+        return activity_summary([target], 1)["total_today"]
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+
+        @callback
+        def _handle_event(event) -> None:
+            if event.data.get("entry_id") != self.config_entry.entry_id:
+                return
+            if event.data.get("chat_ref") != self._target.chat_ref:
+                return
+            if event.data.get("direction") != "incoming":
+                return
             self.async_write_ha_state()
 
         self.async_on_remove(

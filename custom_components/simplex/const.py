@@ -27,8 +27,16 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 Mo
 
 # Extensions autorisées selon le type de clip
 UPLOAD_EXTENSIONS = {
+    "audio": (".ogg", ".opus", ".m4a", ".mp3", ".wav", ".webm"),
+    "video": (".webm", ".mp4", ".mov", ".mkv"),
+    "image": (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".heic", ".heif"),
+}
+
+# Extension de repli quand le nom d'origine n'en fournit pas d'utile.
+DEFAULT_UPLOAD_EXTENSION = {
     "audio": ".ogg",
     "video": ".webm",
+    "image": ".jpg",
 }
 
 PLATFORMS: list[Platform] = [
@@ -46,6 +54,9 @@ EVENT_TARGETS_UPDATED = f"{DOMAIN}_targets_updated"
 # Fired when the CLI answered with a chatCmdError, so the last error can be
 # surfaced as an entity attribute and in the logbook.
 EVENT_ERROR = f"{DOMAIN}_error"
+# Fired when the activity counters changed (a message, or a history
+# back-fill) so the statistics sensors can refresh.
+EVENT_ACTIVITY_UPDATED = f"{DOMAIN}_activity_updated"
 
 # Services
 SERVICE_SEND_MESSAGE = "send_message"
@@ -56,6 +67,8 @@ SERVICE_LIST_CONTACTS = "list_contacts"
 SERVICE_LIST_GROUPS = "list_groups"
 SERVICE_REFRESH_CONTACTS = "refresh_contacts"
 SERVICE_MARK_READ = "mark_read"
+SERVICE_SEARCH = "search"
+SERVICE_ACTIVITY_STATS = "activity_stats"
 
 # HTTP upload view (tablette → HA) and read-only media view (fichiers reçus)
 UPLOAD_URL_PATH = "/api/simplex/upload"

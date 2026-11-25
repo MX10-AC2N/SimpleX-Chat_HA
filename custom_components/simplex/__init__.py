@@ -27,22 +27,31 @@ from .const import (
     DEFAULT_OUTBOX_DIR,
     DEFAULT_WS_URL,
     DOMAIN,
+    EVENT_ACTIVITY_UPDATED,
     EVENT_ERROR,
     EVENT_MESSAGE_RECEIVED,
     EVENT_TARGETS_UPDATED,
     PLATFORMS,
     SERVICE_ACCEPT_INVITE,
     SERVICE_CREATE_INVITE,
+    SERVICE_ACTIVITY_STATS,
     SERVICE_LIST_CONTACTS,
     SERVICE_LIST_GROUPS,
     SERVICE_MARK_READ,
     SERVICE_REFRESH_CONTACTS,
+    SERVICE_SEARCH,
     SERVICE_SEND_FILE,
     SERVICE_SEND_MESSAGE,
 )
 from .http import SimplexMediaView, SimplexUploadView
 from .llm_api import register_llm_api
 from .mapping import normalize_chat_item, pending_incoming_file_id
+from .stats import (
+    DEFAULT_WINDOW_DAYS,
+    record_message,
+    seed_from_items,
+    summary as activity_summary,
+)
 from .targets import SimplexTargetRegistry
 from .websocket_client import SimplexWsClient, SimplexWsError
 from . import ws_api
@@ -158,6 +167,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Unexpected error during SimpleX auto-discovery")
 
+    # Back-fill the activity counters from the existing history, in the
+    # background so the start-up is not slowed down.
+    if auto_discover:
+        hass.async_create_task(_seed_activity(hass, client, registry))
     # Forward platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -576,6 +589,44 @@ def _handle_contact_event(
     _sync_targets(hass, entry, registry, created)
 
 
+async def _seed_activity(
+    hass: HomeAssistant,
+    client: SimplexWsClient,
+    registry: SimplexTargetRegistry,
+    limit: int = 200,
+) -> None:
+    """Back-fill the activity counters from the existing chat history.
+
+    Without this, the statistics would only count what arrives while Home
+    Assistant is running. The history is read per chat, in the background,
+    and any failure is non-fatal.
+    """
+    for target in registry.targets:
+        try:
+            items = await client.get_chat_history(target.chat_ref, limit=limit)
+        except SimplexWsError as exc:
+            _LOGGER.debug("activity seed: %s failed: %s", target.chat_ref, exc)
+            continue
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("activity seed: %s failed", target.chat_ref, exc_info=True)
+            continue
+        counted = seed_from_items(target, items)
+        if counted:
+            _LOGGER.debug(
+                "activity seed: %s → %d message(s) counted", target.chat_ref, counted
+            )
+    # The statistics sensors must refresh once the back-fill is done.
+    hass.bus.async_fire(EVENT_ACTIVITY_UPDATED, {"entry_id": registry_entry_id(hass, registry)})
+
+
+def registry_entry_id(hass: HomeAssistant, registry: SimplexTargetRegistry) -> str | None:
+    """Return the config entry id owning a registry, if any."""
+    for entry_id, data in hass.data.get(DOMAIN, {}).items():
+        if isinstance(data, dict) and data.get("registry") is registry:
+            return entry_id
+    return None
+
+
 def _apply_message_to_registry(
     registry: SimplexTargetRegistry, normalized: dict[str, Any]
 ) -> None:
@@ -599,6 +650,8 @@ def _apply_message_to_registry(
     target.last_direction = normalized.get("direction")
     if normalized.get("direction") == "incoming":
         target.unread_count = (target.unread_count or 0) + 1
+        # Activity statistics only count what was *received*.
+        record_message(target, normalized.get("timestamp"))
 
 
 # ------------------------------------------------------------------
@@ -685,6 +738,54 @@ def _register_services(hass: HomeAssistant) -> None:
         data["last_invite_link"] = link
 
         return {"invite_link": link}
+
+    async def handle_search(call: ServiceCall) -> dict[str, Any]:
+        """Search across every conversation at once."""
+        entry_id = call.data.get("entry_id")
+        query = str(call.data["query"]).strip()
+        limit = int(call.data.get("limit", 50))
+        if not query:
+            return {"query": query, "count": 0, "results": []}
+
+        data = _get_entry_data(hass, entry_id)
+        client: SimplexWsClient = data["client"]
+        targets = data.get("targets", {})
+        try:
+            raw_items = await client.search_items(query, limit=limit)
+        except SimplexWsError as err:
+            raise HomeAssistantError(str(err)) from err
+
+        groups: dict[str, dict[str, Any]] = {}
+        count = 0
+        for raw in raw_items:
+            normalized = normalize_chat_item(raw, targets, data.get("inbox_dir"))
+            if normalized is None:
+                continue
+            chat_ref = normalized.get("chat_ref") or "?"
+            group = groups.get(chat_ref)
+            if group is None:
+                group = {
+                    "chat_ref": chat_ref,
+                    "alias": normalized.get("alias"),
+                    "name": normalized.get("display_name") or normalized.get("alias"),
+                    "type": normalized.get("type"),
+                    "messages": [],
+                }
+                groups[chat_ref] = group
+            group["messages"].append(normalized)
+            count += 1
+
+        return {"query": query, "count": count, "results": list(groups.values())}
+
+    async def handle_activity_stats(call: ServiceCall) -> dict[str, Any]:
+        """Return the message activity (per day, per chat)."""
+        entry_id = call.data.get("entry_id")
+        days = int(call.data.get("days", DEFAULT_WINDOW_DAYS))
+        data = _get_entry_data(hass, entry_id)
+        registry: SimplexTargetRegistry | None = data.get("registry")
+        if registry is None:
+            raise HomeAssistantError("SimpleX target registry is not available")
+        return activity_summary(registry.targets, days)
 
     async def handle_list_contacts(call: ServiceCall) -> dict[str, Any]:
         entry_id = call.data.get("entry_id")
@@ -854,6 +955,35 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Optional("alias"): cv.string,
                 vol.Optional("chat_ref"): cv.string,
                 vol.Required("item_ids"): vol.All(cv.ensure_list, [cv.positive_int]),
+                vol.Optional("entry_id"): cv.string,
+            }
+        ),
+        supports_response=True,
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SEARCH,
+        handle_search,
+        schema=vol.Schema(
+            {
+                vol.Required("query"): cv.string,
+                vol.Optional("limit", default=50): vol.All(int, vol.Range(min=1, max=200)),
+                vol.Optional("entry_id"): cv.string,
+            }
+        ),
+        supports_response=True,
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_ACTIVITY_STATS,
+        handle_activity_stats,
+        schema=vol.Schema(
+            {
+                vol.Optional("days", default=DEFAULT_WINDOW_DAYS): vol.All(
+                    int, vol.Range(min=1, max=365)
+                ),
                 vol.Optional("entry_id"): cv.string,
             }
         ),

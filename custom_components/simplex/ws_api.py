@@ -303,8 +303,109 @@ def _find_entry_data_for_alias(
     raise HomeAssistantError(f"Unknown SimpleX alias: {alias}")
 
 
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "simplex/search",
+        vol.Required("query"): str,
+        vol.Optional("limit", default=50): vol.All(int, vol.Range(min=1, max=200)),
+        vol.Optional("entry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_search(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Search every conversation at once.
+
+    Backs the search field of the conversation-list card. The CLI command
+    is `/_get items count=<n> search=<text>` — it matches the message text
+    across all the chats, and each result carries the conversation it
+    belongs to.
+    """
+    from . import normalize_chat_item
+
+    query = str(msg["query"]).strip()
+    if not query:
+        connection.send_result(msg["id"], {"query": query, "count": 0, "results": []})
+        return
+
+    entries = _all_entries(hass, msg.get("entry_id"))
+    if not entries:
+        connection.send_error(msg["id"], "unknown_alias", "No configured SimpleX entry")
+        return
+
+    results: list[dict[str, Any]] = []
+    count = 0
+    for data in entries:
+        client: SimplexWsClient = data["client"]
+        targets = data.get("targets", {})
+        try:
+            raw_items = await client.search_items(query, limit=msg["limit"])
+        except SimplexWsError as err:
+            connection.send_error(msg["id"], "simplex_error", str(err))
+            return
+
+        groups: dict[str, dict[str, Any]] = {}
+        for raw in raw_items:
+            normalized = normalize_chat_item(raw, targets, data.get("inbox_dir"))
+            if normalized is None:
+                continue
+            chat_ref = normalized.get("chat_ref") or "?"
+            group = groups.get(chat_ref)
+            if group is None:
+                group = {
+                    "chat_ref": chat_ref,
+                    "alias": normalized.get("alias"),
+                    "name": normalized.get("display_name") or normalized.get("alias"),
+                    "type": normalized.get("type"),
+                    "messages": [],
+                }
+                groups[chat_ref] = group
+            group["messages"].append(normalized)
+            count += 1
+        results.extend(groups.values())
+
+    connection.send_result(
+        msg["id"], {"query": query, "count": count, "results": results}
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "simplex/activity",
+        vol.Optional("days", default=30): vol.All(int, vol.Range(min=1, max=365)),
+        vol.Optional("entry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_activity(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Return the message activity (per day, per chat).
+
+    Backs the activity panel of the dashboards: a daily series and a
+    per-chat breakdown.
+    """
+    from .stats import summary as activity_summary
+
+    entries = _all_entries(hass, msg.get("entry_id"))
+    if not entries:
+        connection.send_error(msg["id"], "unknown_alias", "No configured SimpleX entry")
+        return
+
+    targets = []
+    for data in entries:
+        registry = data.get("registry")
+        if registry is not None:
+            targets.extend(registry.targets)
+
+    connection.send_result(msg["id"], activity_summary(targets, msg["days"]))
+
+
 def async_register(hass: HomeAssistant) -> None:
     """Register this module's websocket commands (idempotent at the caller)."""
     websocket_api.async_register_command(hass, ws_get_history)
     websocket_api.async_register_command(hass, ws_get_conversations)
     websocket_api.async_register_command(hass, ws_get_contacts)
+    websocket_api.async_register_command(hass, ws_search)
+    websocket_api.async_register_command(hass, ws_activity)
