@@ -60,6 +60,10 @@ class SimplexConversationsCard extends HTMLElement {
     this._unsubscribeExtra = null;
     this._loaded = false;
     this._filter = "";
+    this._mode = "list"; // "list" | "search"
+    this._searchResults = null;
+    this._searchCount = 0;
+    this._searching = false;
   }
 
   setConfig(config) {
@@ -144,13 +148,31 @@ class SimplexConversationsCard extends HTMLElement {
           color: #fff; display: flex; align-items: center; justify-content: space-between;
         }
         .header .count { font-size: 0.72em; font-weight: 400; opacity: 0.6; }
-        .search { padding: 0 12px 8px 12px; }
+        .search { padding: 0 12px 8px 12px; display: flex; gap: 6px; }
         .search input {
-          width: 100%; box-sizing: border-box;
+          flex: 1 1 auto; min-width: 0; box-sizing: border-box;
           padding: 8px 12px; border-radius: 18px; border: none;
           background: rgba(255,255,255,0.08); color: #eef3f5; font-size: 0.9em;
         }
         .search input::placeholder { color: #7d939a; }
+        .search button {
+          flex: 0 0 auto; border: none; border-radius: 18px;
+          padding: 0 12px; background: #2f9e6f; color: #fff; cursor: pointer;
+          font-size: 0.85em;
+        }
+        .search button:disabled { background: #3b4c55; cursor: default; }
+        .search-hint {
+          padding: 0 16px 6px 16px; color: #7d939a; font-size: 0.72em;
+        }
+        .snippet {
+          color: #9fb3ba; font-size: 0.86em; white-space: nowrap;
+          overflow: hidden; text-overflow: ellipsis;
+        }
+        .snippet mark { background: rgba(63,179,127,0.35); color: #fff; border-radius: 3px; }
+        .back-btn {
+          background: none; border: none; color: #6fd3ff; cursor: pointer;
+          font-size: 0.8em; padding: 0 0 6px 16px;
+        }
         .rows { display: flex; flex-direction: column; }
         .row {
           display: flex; align-items: center; gap: 12px;
@@ -198,7 +220,11 @@ class SimplexConversationsCard extends HTMLElement {
           <span class="count" id="count"></span>
         </div>
         ${this._config.show_search
-          ? `<div class="search"><input id="search" type="text" placeholder="Rechercher…" /></div>`
+          ? `<div class="search">
+               <input id="search" type="text" placeholder="Rechercher…" />
+               <button id="search-btn" title="Rechercher dans tous les messages">🔍</button>
+             </div>
+             <div class="search-hint" id="search-hint"></div>`
           : ""}
         <div class="rows" id="rows"><div class="empty">Chargement…</div></div>
       </ha-card>
@@ -208,8 +234,109 @@ class SimplexConversationsCard extends HTMLElement {
     if (search) {
       search.addEventListener("input", (e) => {
         this._filter = (e.target.value || "").trim().toLowerCase();
+        if (this._mode === "search") this._mode = "list";
         this._renderRows();
       });
+      // Enter → search the whole message history of every conversation.
+      search.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          this._runSearch();
+        }
+      });
+    }
+    const searchBtn = root.getElementById("search-btn");
+    if (searchBtn) {
+      searchBtn.addEventListener("click", () => this._runSearch());
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Global search (across every conversation)
+  // ------------------------------------------------------------------
+
+  async _runSearch() {
+    const input = this.shadowRoot.getElementById("search");
+    const query = ((input && input.value) || this._filter || "").trim();
+    if (!query) return;
+    this._filter = query.toLowerCase();
+    this._searching = true;
+    this._renderRows();
+    try {
+      const result = await this._hass.connection.sendMessagePromise({
+        type: "simplex/search",
+        query,
+        limit: 100,
+        ...(this._config.entry_id ? { entry_id: this._config.entry_id } : {}),
+      });
+      this._searchResults = result.results || [];
+      this._searchCount = result.count || 0;
+    } catch (err) {
+      this._searchResults = [];
+      this._searchCount = 0;
+      this._renderError(err.message || String(err));
+    } finally {
+      this._searching = false;
+      this._mode = "search";
+      this._renderRows();
+    }
+  }
+
+  _renderSearchRows() {
+    const el = this.shadowRoot.getElementById("rows");
+    if (!el) return;
+    const results = this._searchResults || [];
+    if (!results.length) {
+      el.innerHTML = '<div class="empty">Aucun message ne correspond à cette recherche.</div>';
+      return;
+    }
+    const query = (this._filter || "").toLowerCase();
+    el.innerHTML = results
+      .map((group) => {
+        const snippets = (group.messages || [])
+          .slice(0, 3)
+          .map((m) => {
+            const text = m.file
+              ? `📎 ${m.file.name || "Fichier"}`
+              : m.text || "";
+            return `<div class="snippet">${this._highlight(text, query)}</div>`;
+          })
+          .join("");
+        const more = (group.messages || []).length > 3
+          ? `<div class="snippet">… ${group.messages.length - 3} autre(s)</div>`
+          : "";
+        return `
+          <div class="row" data-alias="${this._escape(group.alias || "")}">
+            <div class="avatar" style="background:${this._avatarColor(group.alias)}">${
+              group.type === "group" ? "👥" : this._initial(group.name)
+            }</div>
+            <div class="body">
+              <div class="name-row">
+                <span class="name">${this._escape(group.name || group.alias || "?")}</span>
+                <span class="time">${group.messages ? group.messages.length : 0} résultat(s)</span>
+              </div>
+              ${snippets}
+              ${more}
+            </div>
+          </div>`;
+      })
+      .join("");
+
+    el.querySelectorAll(".row").forEach((rowEl) => {
+      rowEl.addEventListener("click", () => this._onRowClick(rowEl.dataset.alias));
+    });
+  }
+
+  _highlight(text, query) {
+    const safe = this._escape(text);
+    if (!query) return safe;
+    // The text is HTML-escaped, so the query has to be escaped the same way
+    // for the match to be found.
+    const escaped = this._escape(query).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    try {
+      return safe.replace(new RegExp(`(${escaped})`, "gi"), "<mark>$1</mark>");
+    } catch (e) {
+      return safe;
     }
   }
 
@@ -237,6 +364,34 @@ class SimplexConversationsCard extends HTMLElement {
   _renderRows() {
     const el = this.shadowRoot.getElementById("rows");
     if (!el) return;
+
+    const hint = this.shadowRoot.getElementById("search-hint");
+    const btn = this.shadowRoot.getElementById("search-btn");
+    if (btn) btn.disabled = this._searching;
+
+    if (this._mode === "search") {
+      if (hint) {
+        hint.innerHTML = this._searching
+          ? "Recherche en cours…"
+          : `${this._searchCount} message(s) trouvé(s) · <button class="back-btn" id="back-btn">← conversations</button>`;
+      }
+      const back = this.shadowRoot.getElementById("back-btn");
+      if (back) {
+        back.addEventListener("click", () => {
+          this._mode = "list";
+          this._renderRows();
+        });
+      }
+      this._renderSearchRows();
+      return;
+    }
+
+    if (hint) {
+      hint.textContent = this._filter
+        ? "Filtre local · Entrée pour chercher dans tous les messages"
+        : "Entrée pour chercher dans tous les messages";
+    }
+
     const rows = this._visibleRows();
 
     const countEl = this.shadowRoot.getElementById("count");
