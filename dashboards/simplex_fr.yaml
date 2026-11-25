@@ -179,6 +179,41 @@ views:
                   - domain: notify
                     integration: simplex
 
+      # ---------- Activité ----------
+      - type: grid
+        cards:
+          - type: heading
+            heading: Activité
+            heading_style: title
+            icon: mdi:chart-bar
+
+          - type: tile
+            entity: sensor.simplex_chat_messages_today
+            name: Messages aujourd’hui
+            icon: mdi:message-text-outline
+            vertical: false
+
+          - type: tile
+            entity: sensor.simplex_chat_messages_week
+            name: Messages sur 7 jours
+            icon: mdi:chart-line
+            vertical: false
+
+          - type: markdown
+            title: Messages par jour (7 derniers jours)
+            content: |
+              {% set daily = state_attr('sensor.simplex_chat_messages_week', 'daily') or [] %}
+              {% set mx = (daily | map(attribute='count') | max) if daily else 0 %}
+              {% if mx > 0 %}
+              ```
+              {% for d in daily %}
+              {{ d.date[5:] }} {{ '█' * (d.count * 24 // mx) }} {{ d.count }}
+              {% endfor %}
+              ```
+              {% else %}
+              _Aucune activité sur les 7 derniers jours._
+              {% endif %}
+
       # ---------- Aide ----------
       - type: grid
         cards:
