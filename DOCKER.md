@@ -1,5 +1,8 @@
 # Docker — SimpleX Bridge + Home Assistant (réseau host)
 
+> Guide principal : **[README.md](README.md)** ·
+> [Installation](docs/installation.md) · [Dépannage](docs/troubleshooting.md)
+
 Ce guide cible la configuration où **Home Assistant et `simplex-bridge` tournent sur le même hôte Linux et utilisent tous les deux `network_mode: host`**.
 
 L'intégration Home Assistant est un client WebSocket : elle ne lance pas le binaire SimpleX. Le dépôt `MX10-AC2N/simplex-bridge` démarre `simplex-chat -p 5225`, dont l'API WebSocket écoute sur `127.0.0.1:5225`.
