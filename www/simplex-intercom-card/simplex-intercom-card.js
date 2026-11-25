@@ -126,6 +126,15 @@ class SimplexIntercomCard extends HTMLElement {
           background: var(--primary-color, #03a9f4); color: white;
           font-weight: 500; cursor: pointer;
         }
+        .pic-row { display: flex; gap: 12px; margin-bottom: 10px; }
+        .pic-btn {
+          flex: 1; display: flex; flex-direction: column; align-items: center;
+          gap: 6px; padding: 14px 8px; border-radius: 12px; border: none;
+          background: var(--secondary-background-color, #f0f0f0);
+          color: var(--primary-text-color, #000);
+          cursor: pointer; font-size: 0.95em;
+        }
+        .pic-btn svg { width: 26px; height: 26px; fill: currentColor; }
         .rec-row { display: flex; gap: 12px; margin-bottom: 10px; }
         .rec-btn {
           flex: 1; display: flex; flex-direction: column; align-items: center;
@@ -169,6 +178,13 @@ class SimplexIntercomCard extends HTMLElement {
         <div class="text-row">
           <input id="text-input" type="text" placeholder="Écrire un message…" />
           <button class="send" id="send-text-btn">Envoyer</button>
+        </div>
+        <div class="pic-row">
+          <button class="pic-btn" id="pic-btn">
+            <svg viewBox="0 0 24 24"><path d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>
+            <span>Envoyer une photo</span>
+          </button>
+          <input id="file-input" type="file" accept="image/*" hidden />
         </div>
         <div class="rec-row">
           <button class="rec-btn" id="mic-btn">
@@ -333,6 +349,33 @@ class SimplexIntercomCard extends HTMLElement {
     }
 
     await this._upload(blob, this._recordKind);
+  }
+
+  async _sendPicture(file) {
+    if (!this._selectedAlias) {
+      this._setStatus("Aucun destinataire connu.", "error");
+      return;
+    }
+    this._setStatus("Envoi en cours…", "busy");
+    const form = new FormData();
+    form.append("alias", this._selectedAlias);
+    form.append("file", file, file.name || "photo.jpg");
+    if (this._config.entry_id) form.append("entry_id", this._config.entry_id);
+    try {
+      const token = this._hass?.auth?.data?.access_token;
+      const resp = await fetch(UPLOAD_URL, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: form,
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.success) {
+        throw new Error(data.error || `HTTP ${resp.status}`);
+      }
+      this._setStatus("Photo envoyée ✓", "success");
+    } catch (err) {
+      this._setStatus(`Échec de l'envoi : ${err.message || err}`, "error");
+    }
   }
 
   async _upload(blob, kind) {
