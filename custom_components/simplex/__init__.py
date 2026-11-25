@@ -207,6 +207,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     remove_handler = client.add_event_handler(_on_ws_event)
     entry.async_on_unload(remove_handler)
 
+    # Contacts accepted (auto-accept) or deleted while the websocket was down
+    # produce no event we could see: re-read the CLI's lists after every
+    # reconnection so the registry never drifts.
+    if auto_discover:
+
+        def _on_connection_change(connected: bool) -> None:
+            if connected:
+                entry.async_create_background_task(
+                    hass,
+                    _refresh_targets(hass, entry, client, registry),
+                    f"simplex resync {entry.entry_id}",
+                )
+
+        entry.async_on_unload(client.add_connection_listener(_on_connection_change))
+
     # Surface CLI errors (chatCmdError) as HA events so they are visible in
     # the logbook and can drive a dashboard card.
     def _on_ws_error(error: dict[str, Any]) -> None:
@@ -362,12 +377,31 @@ CONTACT_EVENT_TYPES = frozenset(
         "contactSndReady",
         "contactUpdated",
         "contactDeletedByContact",
+        "contactDeleted",
         "receivedContactRequest",
         "newMemberContactReceivedInv",
         "userJoinedGroup",
         "groupUpdated",
+        # The user left / was removed from a group, or the group was deleted.
+        "leftMemberUser",
+        "deletedMemberUser",
+        "groupDeleted",
     }
 )
+
+# Events after which the chat can no longer be written to.
+_CHAT_GONE_EVENTS = frozenset(
+    {
+        "contactDeletedByContact",
+        "contactDeleted",
+        "leftMemberUser",
+        "deletedMemberUser",
+        "groupDeleted",
+    }
+)
+
+# memberStatus values of *our own* membership meaning "we are out of the group".
+_DEAD_GROUP_STATUSES = frozenset({"removed", "left", "deleted", "rejected", "group_deleted"})
 
 # ContactStatus enum of the CLI v7: active | deleted | deletedByUser | rejected
 _DEAD_CONTACT_STATUSES = frozenset({"deleted", "deletedByUser", "rejected"})
@@ -403,15 +437,20 @@ async def _refresh_targets(
     """
     contacts: list[dict[str, Any]] = []
     groups: list[dict[str, Any]] = []
+    failures: list[str] = []
 
     try:
         contacts = await client.list_contacts()
     except SimplexWsError as exc:
-        _LOGGER.debug("list_contacts failed: %s", exc)
+        failures.append(f"contacts: {exc}")
     try:
         groups = await client.list_groups()
     except SimplexWsError as exc:
-        _LOGGER.debug("list_groups failed: %s", exc)
+        failures.append(f"groups: {exc}")
+    if failures:
+        # Not debug-level: a silent failure here looks exactly like "the CLI
+        # has no contacts", which is the confusing "nothing shows up" symptom.
+        _LOGGER.warning("SimpleX auto-discovery incomplete (%s)", "; ".join(failures))
 
     created = False
 
@@ -433,11 +472,17 @@ async def _refresh_targets(
         created = created or is_new
 
     for group in groups:
+        # Some CLI builds list groups as [GroupInfo, GroupSummary] pairs.
+        if isinstance(group, (list, tuple)) and group:
+            group = group[0]
         if not isinstance(group, dict):
             continue
         gid = group.get("groupId")
         if gid is None:
             continue
+        member_status = str((group.get("membership") or {}).get("memberStatus") or "")
+        if member_status.replace("-", "_").lower() in _DEAD_GROUP_STATUSES:
+            continue  # we left / were removed: nothing can be sent there
         _, is_new = registry.upsert_discovered(
             f"#{gid}",
             _group_display_name(group, f"Group {gid}"),
@@ -497,7 +542,7 @@ def _handle_contact_event(
     gid = group.get("groupId")
 
     if cid is not None:
-        connected = etype != "contactDeletedByContact"
+        connected = etype not in _CHAT_GONE_EVENTS
         _, is_new = registry.upsert_discovered(
             f"@{cid}",
             _contact_display_name(contact, f"Contact {cid}"),
@@ -516,7 +561,7 @@ def _handle_contact_event(
             f"#{gid}",
             _group_display_name(group, f"Group {gid}"),
             "group",
-            True,
+            etype not in _CHAT_GONE_EVENTS,
         )
         created = created or is_new
     elif etype == "receivedContactRequest":
@@ -602,7 +647,7 @@ def _register_services(hass: HomeAssistant) -> None:
         if not await hass.async_add_executor_job(Path(file_path).is_file):
             raise HomeAssistantError(f"File not found: {file_path}")
         try:
-            await client.send_file(chat_ref, file_path)
+            await client.send_file(chat_ref, file_path, text=call.data.get("message", ""))
         except SimplexWsError as err:
             raise HomeAssistantError(str(err)) from err
 
@@ -762,6 +807,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Optional("alias"): cv.string,
                 vol.Optional("chat_ref"): cv.string,
                 vol.Required("file_path"): cv.string,
+                vol.Optional("message"): cv.string,
                 vol.Optional("entry_id"): cv.string,
             }
         ),

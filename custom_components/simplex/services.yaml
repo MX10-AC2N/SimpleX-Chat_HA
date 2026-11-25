@@ -62,6 +62,13 @@ send_file:
       example: "/config/simplex_outbox/clip_20261114.ogg"
       selector:
         text:
+    message:
+      name: Caption
+      description: Optional text sent together with the file.
+      required: false
+      example: "Camera snapshot"
+      selector:
+        text:
     entry_id:
       name: Config entry ID
       description: Optional. Required only if you have multiple SimpleX integrations.

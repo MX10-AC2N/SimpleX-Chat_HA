@@ -37,6 +37,30 @@ class SimplexWsTimeoutError(SimplexWsError):
     """Raised when an RPC times out."""
 
 
+_CONNECTION_READY_EVENTS = frozenset(
+    {
+        "contactConnected",
+        "contactSndReady",
+        "userJoinedGroup",
+        "groupJoined",
+        "startedConnectionToContact",
+        "contactConnecting",
+    }
+)
+
+
+def _connection_ready_ref(resp: dict[str, Any]) -> tuple[str, str] | None:
+    """Return (chat_ref, type) when `resp` announces a usable new chat."""
+    etype = resp.get("type")
+    if etype not in _CONNECTION_READY_EVENTS:
+        return None
+    if etype in ("userJoinedGroup", "groupJoined"):
+        gid = (resp.get("groupInfo") or resp.get("group") or {}).get("groupId")
+        return (f"#{gid}", "group") if gid is not None else None
+    cid = (resp.get("contact") or {}).get("contactId")
+    return (f"@{cid}", "contact") if cid is not None else None
+
+
 class SimplexWsClient:
     """Async client for the SimpleX Chat CLI WebSocket API.
 
@@ -364,6 +388,34 @@ class SimplexWsClient:
 
         user_id = await self._get_user_id()
 
+        # Listen for the readiness event through a regular event handler, and
+        # register it BEFORE sending the command so an event arriving right
+        # after the CLI's answer cannot be missed. The previous implementation
+        # read the shared event queue directly: for up to `timeout` seconds it
+        # competed with the dispatcher, swallowed the connection events of
+        # *other* contacts (so the registry never saw them) and re-queued the
+        # rest out of order.
+        ready: asyncio.Future = self._loop.create_future()
+
+        def _on_ready_event(event: dict[str, Any]) -> None:
+            resp = event.get("resp") if isinstance(event, dict) else None
+            if ready.done() or not isinstance(resp, dict):
+                return
+            found = _connection_ready_ref(resp)
+            if found:
+                ready.set_result((found[0], found[1], resp))
+
+        remove_ready_handler = self.add_event_handler(_on_ready_event)
+        try:
+            return await self._accept_invite(link, user_id, timeout, ready)
+        finally:
+            remove_ready_handler()
+            if not ready.done():
+                ready.cancel()
+
+    async def _accept_invite(
+        self, link: str, user_id: int, timeout: float, ready: asyncio.Future
+    ) -> dict[str, Any]:
         # Official APIConnect + legacy fallback
         candidates = [
             f"/_connect {user_id} {link}",
@@ -413,61 +465,13 @@ class SimplexWsClient:
                 initial.get("type"),
             )
 
-        # Wait for a readiness event
-        wanted = {
-            "contactConnected",
-            "contactSndReady",
-            "userJoinedGroup",
-            "groupJoined",
-            "startedConnectionToContact",
-            "contactConnecting",
-        }
-        deadline = self._loop.time() + timeout
-        while self._loop.time() < deadline:
-            try:
-                evt = await asyncio.wait_for(self._events.get(), timeout=2.0)
-            except asyncio.TimeoutError:
-                continue
-
-            resp = evt.get("resp") if isinstance(evt, dict) else None
-            if not isinstance(resp, dict):
-                continue
-            etype = resp.get("type")
-            if etype not in wanted:
-                await self._events.put(evt)
-                continue
-
-            chat_ref: str | None = None
-            chat_type = "contact"
-
-            if etype in (
-                "contactConnected",
-                "contactSndReady",
-                "startedConnectionToContact",
-                "contactConnecting",
-            ):
-                contact = resp.get("contact") or {}
-                cid = contact.get("contactId")
-                if cid is not None:
-                    chat_ref = f"@{cid}"
-            elif etype in ("userJoinedGroup", "groupJoined"):
-                group = resp.get("groupInfo") or resp.get("group") or {}
-                gid = group.get("groupId")
-                if gid is not None:
-                    chat_ref = f"#{gid}"
-                    chat_type = "group"
-
-            if chat_ref:
-                return {
-                    "chat_ref": chat_ref,
-                    "type": chat_type,
-                    "initial": initial,
-                    "event": resp,
-                }
-
-        raise SimplexWsTimeoutError(
-            "Timed out waiting for connection confirmation after accepting invite"
-        )
+        try:
+            chat_ref, chat_type, event = await asyncio.wait_for(ready, timeout)
+        except asyncio.TimeoutError as exc:
+            raise SimplexWsTimeoutError(
+                "Timed out waiting for connection confirmation after accepting invite"
+            ) from exc
+        return {"chat_ref": chat_ref, "type": chat_type, "initial": initial, "event": event}
 
     async def create_invite(self, timeout: float = 15.0) -> str:
         """Create a one-time invitation link (APIAddContact).
