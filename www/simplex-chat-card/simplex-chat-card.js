@@ -566,10 +566,12 @@ class SimplexChatCard extends HTMLElement {
         <div class="messages" id="messages"><div class="empty">Chargement…</div></div>
         <video class="preview" id="preview" autoplay muted playsinline></video>
         <div class="composer">
+          <button class="icon-btn" id="pic-btn" title="Envoyer une image">${this._iconImage()}</button>
           <button class="icon-btn" id="mic-btn" title="Message vocal">${this._iconMic()}</button>
           <button class="icon-btn" id="cam-btn" title="Message vidéo">${this._iconCam()}</button>
           <input id="text-input" type="text" placeholder="Écrire un message…" />
           <button class="icon-btn send" id="send-btn" title="Envoyer">${this._iconSend()}</button>
+          <input id="file-input" type="file" accept="image/*,video/*" hidden />
         </div>
       </ha-card>
     `;
@@ -580,6 +582,16 @@ class SimplexChatCard extends HTMLElement {
     });
     root.getElementById("mic-btn").addEventListener("click", () => this._toggleRecord("audio"));
     root.getElementById("cam-btn").addEventListener("click", () => this._toggleRecord("video"));
+    const picBtn = root.getElementById("pic-btn");
+    const fileInput = root.getElementById("file-input");
+    if (picBtn && fileInput) {
+      picBtn.addEventListener("click", () => fileInput.click());
+      fileInput.addEventListener("change", (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (file) this._sendFile(file);
+        e.target.value = "";
+      });
+    }
     const readBtn = root.getElementById("read-btn");
     if (readBtn) {
       readBtn.addEventListener("click", () => this._markRead(this._unreadIncoming(), false));
@@ -598,6 +610,9 @@ class SimplexChatCard extends HTMLElement {
   }
   _iconFile() {
     return '<svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>';
+  }
+  _iconImage() {
+    return '<svg viewBox="0 0 24 24"><path d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>';
   }
 
   _escape(str) {
@@ -885,6 +900,34 @@ class SimplexChatCard extends HTMLElement {
       return;
     }
     await this._upload(blob, this._recordKind);
+  }
+
+  async _sendFile(file) {
+    if (!this._alias) {
+      this._setStatus("Aucune conversation sélectionnée.");
+      return;
+    }
+    const statusLine = this.shadowRoot.getElementById("status-line");
+    if (statusLine) statusLine.textContent = "Envoi en cours…";
+    const form = new FormData();
+    form.append("alias", this._alias);
+    form.append("file", file, file.name || "media");
+    if (this._config.entry_id) form.append("entry_id", this._config.entry_id);
+    try {
+      const token = this._hass?.auth?.data?.access_token;
+      const resp = await fetch(UPLOAD_URL, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: form,
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.success) {
+        throw new Error(data.error || `HTTP ${resp.status}`);
+      }
+      this._setStatus(null);
+    } catch (err) {
+      if (statusLine) statusLine.textContent = `Échec de l'envoi : ${err.message || err}`;
+    }
   }
 
   async _upload(blob, kind) {
