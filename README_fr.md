@@ -15,7 +15,7 @@ SimpleX est une messagerie privée par conception (aucun identifiant utilisateur
 - **Messages entrants** — événement `simplex_message_received` + capteur
 - **Suivi des connexions en direct** — un contact accepté pendant que Home Assistant tourne apparaît immédiatement, sans redémarrage
 - **Entités par contact** — dernier message, compteur de non-lus et connectivité, sur un appareil par contact/groupe
-- **Envoi de fichiers et médias** — `simplex.send_file`, plus le point d'entrée d'upload tablette
+- **Envoi de fichiers et médias** — `simplex.send_file`, plus le point d'entrée d'upload tablette (audio, vidéo **et images**, envoyées en ligne)
 - **État de connexion et erreurs** — `binary_sensor` WebSocket + capteur de dernière erreur CLI
 - **Services** — envoyer un message, envoyer un fichier, créer une invitation, accepter un lien, lister contacts/groupes, rafraîchir, marquer comme lu
 - **Outil LLM / Assist** — `send_simplex_message` pour les agents vocaux et IA
@@ -255,6 +255,9 @@ Les entités vivent sur deux types d'appareils :
 | `sensor.simplex_chat_last_error` | Dernière erreur CLI (diagnostic) |
 | `sensor.<contact>_last_message` | Dernier message d'un contact/groupe |
 | `sensor.<contact>_unread_messages` | Compteur de non-lus d'un contact/groupe |
+| `sensor.simplex_chat_messages_today` | Messages reçus aujourd'hui (tous les chats) |
+| `sensor.simplex_chat_messages_week` | Messages reçus sur les 7 derniers jours |
+| `sensor.<contact>_messages_today` | Messages reçus aujourd'hui sur un contact/groupe |
 | `binary_sensor.<contact>_connected` | Connectivité d'un contact/groupe |
 
 > **Entity ids et la mise à niveau 2.0** — l'appareil de l'intégration
@@ -270,6 +273,74 @@ Les entités vivent sur deux types d'appareils :
 L'outil `send_simplex_message` est enregistré automatiquement. Exemple :
 
 > « Envoie un message SimpleX à Alice : je serai là dans 10 minutes »
+
+### Rechercher dans toutes les conversations
+
+Le champ de recherche de la carte des conversations filtre la liste au fil
+de la frappe. Appuie sur **Entrée** (ou sur le bouton 🔍) pour chercher
+dans le *texte des messages* de toutes les conversations à la fois — la
+commande CLI utilisée est `/_get items count=<n> search=<text>`, qui
+cherche par-dessus tous les chats.
+
+Les résultats sont regroupés par conversation, avec les extraits
+correspondants surlignés ; un clic ouvre la conversation. La même
+recherche est disponible en service et en commande websocket :
+
+```yaml
+action: simplex.search
+data:
+  query: "dîner"
+  limit: 50
+```
+
+L'outil Assist/LLM `search_simplex_messages` l'expose aussi, pour demander
+*« quand ai-je parlé du dîner à Alice ? »*.
+
+### Envoyer des images
+
+La vue de discussion et la carte interphone ont un **bouton image** (📷).
+L'endpoint d'upload accepte `image` en plus de `audio` et `video`, et le
+type est déduit de l'extension du fichier quand il n'est pas précisé.
+
+Les images sont envoyées comme contenu SimpleX `image` (et non comme
+pièces jointes génériques), donc elles s'affichent en ligne dans les
+clients SimpleX.
+
+```yaml
+action: simplex.send_file
+data:
+  alias: Alice
+  file_path: /config/simplex_outbox/photo.jpg
+```
+
+Extensions image acceptées : `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`,
+`.bmp`, `.heic`, `.heif`.
+
+### Statistiques d'activité
+
+SimpleX n'expose aucun compteur : l'intégration les déduit de l'historique
+des conversations. Les compteurs sont pré-remplis depuis l'historique au
+démarrage, puis maintenus à jour en continu.
+
+| Entité | Description |
+|--------|-------------|
+| `sensor.simplex_chat_messages_today` | Messages reçus aujourd'hui (tous les chats) |
+| `sensor.simplex_chat_messages_week` | Messages reçus sur les 7 derniers jours |
+| `sensor.<contact>_messages_today` | Messages reçus aujourd'hui sur un contact |
+
+L'attribut `daily` de `sensor.simplex_chat_messages_week` contient la
+série par jour que les tableaux de bord dessinent en petit histogramme.
+
+Pour un détail complet, utilise le service :
+
+```yaml
+action: simplex.activity_stats
+data:
+  days: 30
+```
+
+Il renvoie la série par jour et le détail par chat (nombre sur la
+fenêtre, total historique, non-lus).
 
 ---
 
@@ -387,7 +458,7 @@ Checklist :
 - [x] Capteurs et binary sensors par contact
 - [x] Cartes Lovelace
 - [ ] Support multi-profils
-- [ ] Recherche dans les conversations
+- [x] Recherche dans les conversations
 
 ---
 

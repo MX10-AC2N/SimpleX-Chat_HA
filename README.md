@@ -15,7 +15,7 @@ SimpleX is a messenger that is private by design (no user identifiers, end-to-en
 - **Incoming messages** — `simplex_message_received` event + sensor
 - **Live connection tracking** — a contact accepted while Home Assistant is running shows up immediately, no restart
 - **Per-contact entities** — last message, unread counter and connectivity, on one device per contact/group
-- **File & media sending** — `simplex.send_file`, plus the tablet upload endpoint
+- **File & media sending** — `simplex.send_file`, plus the tablet upload endpoint (audio, video **and images**, sent inline)
 - **Connection status & error reporting** — WebSocket `binary_sensor` + last CLI error sensor
 - **Services** — send message, send file, create invite, accept link, list contacts/groups, refresh, mark as read
 - **LLM / Assist tool** — `send_simplex_message` for voice and AI agents
@@ -255,6 +255,9 @@ Entities live on two kinds of devices:
 | `sensor.simplex_chat_last_error` | Last CLI error (diagnostic) |
 | `sensor.<contact>_last_message` | Last message of one contact/group |
 | `sensor.<contact>_unread_messages` | Unread counter of one contact/group |
+| `sensor.simplex_chat_messages_today` | Messages received today (all chats) |
+| `sensor.simplex_chat_messages_week` | Messages received over the last 7 days |
+| `sensor.<contact>_messages_today` | Messages received today on one contact/group |
 | `binary_sensor.<contact>_connected` | Connectivity of one contact/group |
 
 > **Entity ids and the 2.0 upgrade** — the integration device used to be
@@ -269,6 +272,72 @@ Entities live on two kinds of devices:
 The `send_simplex_message` tool is registered automatically. Example:
 
 > “Send a SimpleX message to Alice: I’ll be home in 10 minutes”
+
+### Searching across every conversation
+
+The conversation-list card's search box filters the list as you type.
+Press **Enter** (or the 🔍 button) to search the *message text* of every
+conversation at once — the CLI command behind it is
+`/_get items count=<n> search=<text>`, which matches across all chats.
+
+Results are grouped by conversation, with the matching snippets
+highlighted; clicking a group opens that conversation. The same search is
+available as a service and as a websocket command:
+
+```yaml
+action: simplex.search
+data:
+  query: "dinner"
+  limit: 50
+```
+
+The Assist/LLM tool `search_simplex_messages` exposes it too, so you can
+ask *"when did I tell Alice about the dinner?"*.
+
+### Sending images
+
+The chat view and the intercom card have a **picture button** (📷). The
+upload endpoint accepts `image` as well as `audio` and `video`, and the
+kind is inferred from the file extension when it is not stated.
+
+Pictures are sent as SimpleX `image` content (not as generic file
+attachments), so they are displayed inline by the SimpleX clients.
+
+```yaml
+action: simplex.send_file
+data:
+  alias: Alice
+  file_path: /config/simplex_outbox/photo.jpg
+```
+
+Accepted image extensions: `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`,
+`.bmp`, `.heic`, `.heif`.
+
+### Activity statistics
+
+SimpleX exposes no counters, so the integration derives them from the
+chat history: the counters are back-filled from the history at start-up
+and then maintained incrementally.
+
+| Entity | Description |
+|--------|-------------|
+| `sensor.simplex_chat_messages_today` | Messages received today (all chats) |
+| `sensor.simplex_chat_messages_week` | Messages received over the last 7 days |
+| `sensor.<contact>_messages_today` | Messages received today on one contact |
+
+The `daily` attribute of `sensor.simplex_chat_messages_week` holds the
+per-day series the dashboards draw as a small bar chart.
+
+For a detailed breakdown, use the service:
+
+```yaml
+action: simplex.activity_stats
+data:
+  days: 30
+```
+
+It returns the daily series and the per-chat breakdown (count over the
+window, all-time total, unread count).
 
 ---
 
@@ -384,7 +453,7 @@ Checklist:
 - [x] Per-contact sensors and binary sensors
 - [x] Lovelace cards
 - [ ] Multi-profile support
-- [ ] Chat / message search across conversations
+- [x] Chat / message search across conversations
 
 ---
 
