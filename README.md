@@ -158,6 +158,7 @@ action: simplex.send_file
 data:
   alias: Alice
   file_path: /config/simplex_outbox/clip.ogg
+  message: "Doorbell recording"   # optional caption
 ```
 
 The path must be readable by the `simplex-chat` process — use a volume
@@ -371,6 +372,7 @@ Checklist:
 2. Is `binary_sensor.simplex_chat_connection` `on`?
 3. Any `chatCmdError` entries in the logs? (`sensor.simplex_chat_last_error`)
 4. Is the invitation link still valid?
+5. A contact is missing? Call `simplex.refresh_contacts`. The integration also re-reads the CLI's contacts and groups after every reconnection, and logs a warning (`auto-discovery incomplete`) if a listing fails.
 
 ---
 

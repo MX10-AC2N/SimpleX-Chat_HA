@@ -158,6 +158,7 @@ action: simplex.send_file
 data:
   alias: Alice
   file_path: /config/simplex_outbox/clip.ogg
+  message: "Enregistrement de la sonnette"   # légende optionnelle
 ```
 
 Le chemin doit être lisible par le processus `simplex-chat` — utilisez un
@@ -374,6 +375,7 @@ Checklist :
 2. `binary_sensor.simplex_chat_connection` est-il `on` ?
 3. Des entrées `chatCmdError` dans les logs ? (`sensor.simplex_chat_last_error`)
 4. Le lien d'invitation est-il encore valide ?
+5. Un contact manque ? Appelez `simplex.refresh_contacts`. L'intégration relit aussi les contacts et groupes du CLI après chaque reconnexion, et journalise un avertissement (`auto-discovery incomplete`) si une liste échoue.
 
 ---
 
