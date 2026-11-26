@@ -1,0 +1,21 @@
+# SimpleX Messenger (Glass) — une seule vue, liste + conversation (FR)
+# -----------------------------------------------------------------------
+# Un seul écran, sans configuration de contacts : la carte
+# simplex-messenger-card héberge la liste des conversations et le chat.
+#   - ordinateur / tablette : liste à gauche, conversation à droite ;
+#   - téléphone             : liste, puis conversation en plein écran.
+#
+# Aucun "navigate_prefix" ici : la carte détecte elle-même l'URL de cette
+# vue (elle doit pointer sur la vue qui l'héberge, jamais ailleurs).
+# La carte est chargée automatiquement par l'intégration.
+
+title: SimpleX Messenger
+views:
+  - title: Messenger
+    path: messenger
+    icon: mdi:message-lock
+    type: panel
+    cards:
+      - type: custom:simplex-messenger-card
+        glass_intensity: balanced   # off | subtle | balanced | strong
+        show_branding: true

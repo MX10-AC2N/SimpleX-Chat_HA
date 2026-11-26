@@ -1,0 +1,21 @@
+# SimpleX Messenger (Glass) — one view, list + conversation (EN)
+# -----------------------------------------------------------------------
+# One screen, no contact configuration: simplex-messenger-card hosts the
+# conversation list and the chat.
+#   - desktop / tablet : list on the left, conversation on the right;
+#   - phone            : list, then a full-screen conversation.
+#
+# No "navigate_prefix" here: the card detects the URL of this very view
+# (it must point at the view hosting it, never elsewhere).
+# The card is loaded automatically by the integration.
+
+title: SimpleX Messenger
+views:
+  - title: Messenger
+    path: messenger
+    icon: mdi:message-lock
+    type: panel
+    cards:
+      - type: custom:simplex-messenger-card
+        glass_intensity: balanced   # off | subtle | balanced | strong
+        show_branding: true
