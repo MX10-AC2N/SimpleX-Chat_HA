@@ -73,6 +73,14 @@ class TestBundle(unittest.TestCase):
             self.assertTrue(cfg["views"])
             self.assertIn("-", frontend.default_url_path(name))
 
+    def test_service_picker_offers_every_dashboard(self):
+        import re
+
+        text = (DASHBOARDS_DIR.parent / "services.yaml").read_text(encoding="utf-8")
+        block = text.split("install_dashboard:", 1)[1].split("url_path:", 1)[0]
+        options = set(re.findall(r"^\s+- (simplex_\w+)\s*$", block, re.M))
+        self.assertEqual(options, set(CATALOG))
+
     def test_navigation_is_rewritten_into_the_dashboard(self):
         cfg = frontend.rewrite_navigation(frontend.load_dashboard("simplex_auto_fr"), "simplex-auto-fr")
         prefixes = [n["navigate_prefix"] for n in frontend._walk(cfg) if isinstance(n, dict) and "navigate_prefix" in n]
@@ -81,6 +89,20 @@ class TestBundle(unittest.TestCase):
         for n in frontend._walk(cfg):
             if isinstance(n, dict) and "navigate_prefix" in n:
                 self.assertEqual(n["navigate_prefix"], "/my-dash/simplex-chat")
+
+
+    def test_messenger_never_navigates_away_from_its_own_view(self):
+        """The list card pushes `<prefix>#alias`; if the prefix is not the view that
+        hosts the messenger, Home Assistant routes elsewhere and unmounts it."""
+        for name in ("simplex_messenger_fr", "simplex_messenger_en"):
+            cfg = frontend.rewrite_navigation(frontend.load_dashboard(name), "my-dash")
+            views = [v["path"] for v in cfg["views"]]
+            self.assertEqual(views, ["messenger"], name)
+            cards = [n for n in frontend._walk(cfg) if isinstance(n, dict) and n.get("type") == "custom:simplex-messenger-card"]
+            self.assertEqual(len(cards), 1, name)
+            prefix = cards[0].get("navigate_prefix")
+            # Absent (auto-detected from the URL) or exactly this view.
+            self.assertIn(prefix, (None, "/my-dash/messenger"), name)
 
 
 class TestInstall(unittest.TestCase):
@@ -123,15 +145,16 @@ class TestCards(unittest.TestCase):
         self.assertEqual(
             files,
             ["simplex-card-editor.js"]
-            + [f"simplex-{n}-card/simplex-{n}-card.js" for n in ("chat", "conversations", "intercom")],
+            + [f"simplex-{n}-card/simplex-{n}-card.js" for n in ("chat", "conversations", "intercom", "messenger")],
         )
         for f in files:
             src = (frontend.CARDS_DIR / f).read_text(encoding="utf-8")
-            self.assertIn("if (!customElements.get(", src, "must tolerate a manual /local copy")
+            # The messenger is a minified build: only the guard itself is stable.
+            self.assertRegex(src, r"customElements\.get\(", "must tolerate a manual /local copy")
             if f.endswith("-card.js"):
                 kind = f.split("/")[0].split("-")[1]
                 self.assertIn(f'"simplex-{kind}-card-editor"', src, "card must expose its visual editor")
-                self.assertIn("static getStubConfig", src)
+                self.assertRegex(src, r"getStubConfig", "card must provide a stub config")
 
     def test_registration_serves_and_loads_each_card_once(self):
         import types
@@ -151,12 +174,12 @@ class TestCards(unittest.TestCase):
         hass.http = types.SimpleNamespace(async_register_static_paths=reg)
         data: dict = {}
         urls = run(frontend.async_register_cards(hass, data))
-        self.assertEqual(len(urls), 4)
+        self.assertEqual(len(urls), 5)
         self.assertEqual(extra, urls)
         self.assertTrue(all(u.startswith("/simplex_cards/") and "?v=" in u for u in urls))
         self.assertEqual(static[0][0], "/simplex_cards")
         self.assertEqual(run(frontend.async_register_cards(hass, data)), [], "idempotent")
-        self.assertEqual(len(extra), 4)
+        self.assertEqual(len(extra), 5)
 
 
 if __name__ == "__main__":
