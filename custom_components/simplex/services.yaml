@@ -221,3 +221,38 @@ activity_stats:
       required: false
       selector:
         text:
+
+install_dashboard:
+  name: Install dashboard
+  description: Create a SimpleX dashboard in the sidebar from the dashboards bundled with the integration (administrators only). Cards are installed separately (HACS).
+  fields:
+    dashboard:
+      name: Dashboard
+      description: Bundled dashboard to install.
+      required: true
+      example: simplex_auto_fr
+      selector:
+        select:
+          options:
+            - simplex_auto_fr
+            - simplex_auto_en
+            - simplex_fr
+            - simplex_en
+            - simplex_mushroom_fr
+            - simplex_mushroom_en
+            - simplex_android_home_fr
+            - simplex_android_look_fr
+            - simplex_tablet_fr
+    url_path:
+      name: URL path
+      description: Optional. Must contain a hyphen. Defaults to the dashboard name with dashes.
+      required: false
+      selector:
+        text:
+    overwrite:
+      name: Overwrite
+      description: Replace the content if the dashboard already exists.
+      required: false
+      default: false
+      selector:
+        boolean:

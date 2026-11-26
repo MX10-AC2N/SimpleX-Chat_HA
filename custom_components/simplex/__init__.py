@@ -43,6 +43,12 @@ from .const import (
     SERVICE_SEND_FILE,
     SERVICE_SEND_MESSAGE,
 )
+from .frontend import (
+    DashboardInstallError,
+    async_install_dashboard,
+    async_register_cards,
+    available_dashboards,
+)
 from .http import SimplexMediaView, SimplexUploadView
 from .llm_api import register_llm_api
 from .mapping import normalize_chat_item, pending_incoming_file_id
@@ -77,6 +83,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     if not hass.data[DOMAIN].get(_DATA_WS_API_REGISTERED):
         ws_api.async_register(hass)
         hass.data[DOMAIN][_DATA_WS_API_REGISTERED] = True
+    try:
+        await async_register_cards(hass, hass.data[DOMAIN])
+    except Exception:  # noqa: BLE001 - cards are optional, never block the integration
+        _LOGGER.exception("Could not register the SimpleX Lovelace cards")
     return True
 
 
@@ -1003,6 +1013,39 @@ def _register_services(hass: HomeAssistant) -> None:
         ),
         supports_response=True,
     )
+
+    async def handle_install_dashboard(call: ServiceCall) -> dict[str, Any]:
+        return await _handle_install_dashboard(hass, call)
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_INSTALL_DASHBOARD,
+        handle_install_dashboard,
+        schema=vol.Schema(
+            {
+                vol.Required("dashboard"): vol.In(available_dashboards()),
+                vol.Optional("url_path"): cv.string,
+                vol.Optional("overwrite", default=False): cv.boolean,
+            }
+        ),
+        supports_response=True,
+    )
+
+
+async def _handle_install_dashboard(hass: HomeAssistant, call: ServiceCall) -> dict[str, Any]:
+    if call.context.user_id:
+        user = await hass.auth.async_get_user(call.context.user_id)
+        if user is None or not user.is_admin:
+            raise HomeAssistantError("Installing a dashboard requires an administrator")
+    try:
+        return await async_install_dashboard(
+            hass,
+            call.data["dashboard"],
+            call.data.get("url_path"),
+            call.data.get("overwrite", False),
+        )
+    except DashboardInstallError as err:
+        raise HomeAssistantError(str(err)) from err
 
 
 def _get_entry_data(hass: HomeAssistant, entry_id: str | None) -> dict[str, Any]:

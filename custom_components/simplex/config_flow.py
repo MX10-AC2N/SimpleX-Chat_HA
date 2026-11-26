@@ -15,6 +15,7 @@ from homeassistant.config_entries import ConfigEntry, OptionsFlowWithReload
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
 
+from .frontend import DashboardInstallError, async_install_dashboard, available_dashboards
 from .const import (
     CONF_AUTO_ACCEPT_FILES,
     CONF_AUTO_DISCOVER,
@@ -134,6 +135,7 @@ class OptionsFlowHandler(OptionsFlowWithReload):
                 "remove_contact",
                 "rename_contact",
                 "show_targets",
+                "install_dashboard",
                 "settings",
             ],
         )
@@ -284,6 +286,46 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             step_id="show_targets",
             data_schema=vol.Schema({}),
             description_placeholders={"targets": "\n".join(lines)},
+        )
+
+    async def async_step_install_dashboard(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Install one of the bundled Lovelace dashboards."""
+        names = available_dashboards()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                result = await async_install_dashboard(
+                    self.hass,
+                    user_input["dashboard"],
+                    user_input.get("url_path") or None,
+                    user_input.get("overwrite", False),
+                )
+            except DashboardInstallError as err:
+                errors["base"] = "dashboard_failed"
+                _LOGGER.warning("Dashboard install failed: %s", err)
+                placeholders = {"error": str(err)}
+            else:
+                return self.async_abort(
+                    reason="dashboard_installed",
+                    description_placeholders={
+                        "url_path": result["url_path"],
+                    },
+                )
+        else:
+            placeholders = {"error": ""}
+        return self.async_show_form(
+            step_id="install_dashboard",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("dashboard", default=names[0] if names else ""): vol.In(names),
+                    vol.Optional("url_path", default=""): str,
+                    vol.Optional("overwrite", default=False): bool,
+                }
+            ),
+            errors=errors,
+            description_placeholders=placeholders,
         )
 
     async def async_step_rename_contact(
