@@ -25,7 +25,8 @@
           "remove_contact": "Supprimer un contact",
           "rename_contact": "Renommer un contact / groupe",
           "show_targets": "Afficher les contacts configurés et découverts",
-          "settings": "Paramètres (dossiers outbox/inbox, fichiers, auto-découverte)"
+          "settings": "Paramètres (dossiers outbox/inbox, fichiers, auto-découverte)",
+          "install_dashboard": "Installer un tableau de bord"
         }
       },
       "settings": {
@@ -63,6 +64,15 @@
       "show_targets": {
         "title": "Contacts connus",
         "description": "{targets}"
+      },
+      "install_dashboard": {
+        "title": "Installer un tableau de bord",
+        "description": "Choisissez un tableau de bord fourni. {error}",
+        "data": {
+          "dashboard": "Tableau de bord",
+          "url_path": "Chemin d'URL (optionnel, doit contenir un tiret)",
+          "overwrite": "Remplacer s'il existe déjà"
+        }
       }
     },
     "error": {
@@ -73,11 +83,13 @@
       "invite_expired": "Cette invitation a expiré ou a été révoquée.",
       "ws_not_connected": "Le WebSocket n'est pas connecté. Vérifie que la CLI SimpleX tourne.",
       "required": "Ce champ est obligatoire.",
-      "unknown": "Une erreur inattendue est survenue."
+      "unknown": "Une erreur inattendue est survenue.",
+      "dashboard_failed": "Impossible d'installer le tableau de bord. Voir le journal."
     },
     "abort": {
       "no_targets": "Aucun contact configuré pour l'instant.",
-      "not_loaded": "L'intégration SimpleX n'est pas encore chargée."
+      "not_loaded": "L'intégration SimpleX n'est pas encore chargée.",
+      "dashboard_installed": "Tableau de bord installé sur /{url_path}. Les cartes SimpleX sont chargées automatiquement."
     }
   }
 }

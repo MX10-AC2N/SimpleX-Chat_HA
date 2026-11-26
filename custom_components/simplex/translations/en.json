@@ -25,7 +25,8 @@
           "remove_contact": "Remove a contact",
           "rename_contact": "Rename a contact / group",
           "show_targets": "Show configured and discovered contacts",
-          "settings": "Settings (outbox/inbox directories, files, auto-discovery)"
+          "settings": "Settings (outbox/inbox directories, files, auto-discovery)",
+          "install_dashboard": "Install a dashboard"
         }
       },
       "settings": {
@@ -63,6 +64,15 @@
       "show_targets": {
         "title": "Known contacts",
         "description": "{targets}"
+      },
+      "install_dashboard": {
+        "title": "Install a dashboard",
+        "description": "Choose a bundled dashboard. {error}",
+        "data": {
+          "dashboard": "Dashboard",
+          "url_path": "URL path (optional, must contain a hyphen)",
+          "overwrite": "Replace if it already exists"
+        }
       }
     },
     "error": {
@@ -73,11 +83,13 @@
       "invite_expired": "This invitation has expired or been revoked.",
       "ws_not_connected": "WebSocket is not connected. Check that the SimpleX CLI is running.",
       "required": "This field is required.",
-      "unknown": "An unexpected error occurred."
+      "unknown": "An unexpected error occurred.",
+      "dashboard_failed": "Could not install the dashboard. See the log for details."
     },
     "abort": {
       "no_targets": "No contacts configured yet.",
-      "not_loaded": "The SimpleX integration is not loaded yet."
+      "not_loaded": "The SimpleX integration is not loaded yet.",
+      "dashboard_installed": "Dashboard installed at /{url_path}. The SimpleX cards are loaded automatically."
     }
   }
 }
