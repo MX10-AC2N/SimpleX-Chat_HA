@@ -437,7 +437,7 @@ class SimplexChatCard extends HTMLElement {
           overflow: hidden;
           display: flex;
           flex-direction: column;
-          height: 520px;
+          height: var(--simplex-card-height, 520px);
           background: var(--simplex-bg, #0b141a);
         }
         .header {
@@ -691,15 +691,14 @@ class SimplexChatCard extends HTMLElement {
         dir === "in" && this._contactType === "group" && m.sender
           ? `<span class="sender">${this._escape(m.sender)}</span>`
           : "";
-      html += `
-        <div class="row ${dir}">
-          <div class="bubble ${dir}">
-            ${senderHtml}
-            ${fileHtml}
-            ${textHtml}
-            <span class="meta">${time}${m.edited ? " · modifié" : ""}${ticksHtml}</span>
-          </div>
-        </div>`;
+      // No whitespace between the parts: the bubble is `white-space: pre-wrap`
+      // (to keep the user's own line breaks), so indentation and empty
+      // placeholders would render as blank lines and inflate every bubble.
+      html +=
+        `<div class="row ${dir}"><div class="bubble ${dir}">` +
+        `${senderHtml}${fileHtml}${textHtml}` +
+        `<span class="meta">${time}${m.edited ? " · modifié" : ""}${ticksHtml}</span>` +
+        `</div></div>`;
     }
 
     container.innerHTML = loaderHtml + html;
