@@ -28,6 +28,34 @@ is triggered and nothing is written to the storage.
 
 ---
 
+## Frontend — the Messenger card
+
+The three original cards are plain JavaScript served as they are. The Messenger
+card (`custom:simplex-messenger-card`) is written in TypeScript with
+[Lit](https://lit.dev) in [`frontend/messenger/`](../frontend/messenger) and
+compiled into a single file, **committed** at
+`custom_components/simplex/cards/simplex-messenger-card/simplex-messenger-card.js`
+(HACS runs no build step, so users get exactly what is in the repository; Lit
+is bundled, nothing to install).
+
+```bash
+cd frontend/messenger
+npm ci            # first time (or: npm install)
+npm run typecheck
+npm run build     # rewrites the committed bundle
+```
+
+CI rebuilds it and fails if the committed bundle is out of date.
+
+How it works: the shell hosts `simplex-conversations-card` and
+`simplex-chat-card`, themes them through their `--simplex-*` CSS variables and
+`--simplex-card-height`, and follows the URL hash they write
+(`#alias`, plus `sessionStorage["simplex_chat_alias"]`). It must never change
+those cards' contract: a click in the list does `pushState(<navigate_prefix>#alias)`,
+so the prefix has to be the messenger's own view path (auto-detected).
+
+---
+
 ## Tests
 
 The repository ships a dependency-free test suite that replays **real**
@@ -43,6 +71,7 @@ in `tests/ha_stubs.py`, so the suite runs anywhere Python 3.9+ does.
 | File | Covers |
 |------|--------|
 | `tests/test_simplex.py` | Mapping, targets, stats, upload kinds, services, websocket client |
+| `tests/test_dashboards.py` | Dashboard install, card bundle (incl. the Messenger), navigation rewrite |
 | `tests/test_lifecycle.py` | Connection lifecycle, `accept_invite_link`, auto-discovery edge cases |
 | `tests/data/cli_v7_replay_frames.json` | Real CLI frames captured from v7.1.4.0 |
 

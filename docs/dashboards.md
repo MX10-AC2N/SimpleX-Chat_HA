@@ -1,8 +1,8 @@
 # Dashboards & cards
 
-Nine ready-to-use dashboards ship **inside the integration**
+Eleven ready-to-use dashboards ship **inside the integration**
 ([`custom_components/simplex/dashboards/`](../custom_components/simplex/dashboards)).
-They are optional — the integration works on its own. The three SimpleX cards are
+They are optional — the integration works on its own. The SimpleX cards are
 installed for you; Mushroom / Auto Entities (see below) are only needed by some.
 
 ## One-click install
@@ -31,6 +31,7 @@ to the new URL, never writes to YAML-mode dashboards and never overwrites withou
 | `simplex_fr.yaml` / `simplex_en.yaml` | – | ✅ required | – |
 | `simplex_mushroom_fr.yaml` / `simplex_mushroom_en.yaml` | ✅ **required** | ✅ required | – |
 | `simplex_auto_fr.yaml` / `simplex_auto_en.yaml` | – | – | ✅ required |
+| `simplex_messenger_fr.yaml` / `simplex_messenger_en.yaml` | – | – | ✅ required (installed with the integration) |
 | `simplex_tablet_fr.yaml` | – | – | ✅ required (intercom) |
 | `simplex_android_home_fr.yaml` | – | – | ✅ required |
 | `simplex_android_look_fr.yaml` | – | – | ✅ required |
@@ -56,6 +57,7 @@ type: JavaScript Module
 | `simplex_fr.yaml` / `simplex_en.yaml` | Status, actions, contact list |
 | `simplex_mushroom_fr.yaml` / `_en.yaml` | Same, Mushroom style |
 | `simplex_tablet_fr.yaml` | Wall tablet (intercom) |
+| `simplex_messenger_fr.yaml` / `simplex_messenger_en.yaml` | **Glass Messenger**: list + chat in one responsive view (see below) |
 | `simplex_auto_fr.yaml` / `simplex_auto_en.yaml` | **App-like**: conversation list + chat |
 | `simplex_android_home_fr.yaml` | App-like, one generic chat view |
 | `simplex_android_look_fr.yaml` | Conversation thread only |
@@ -77,6 +79,42 @@ removed; keeping them is harmless.
 Add a card → search **SimpleX** → fill in the form: contact alias, title, history
 size, SimpleX instance (picker), connection sensor (picker), navigation mode,
 recipients… The editor follows your language (English / French).
+
+---
+
+## SimpleX Messenger (Glass)
+
+`custom:simplex-messenger-card` is one card that hosts the conversation list and
+the chat. Desktop / tablet: list on the left, conversation on the right. Phone:
+the list, then a full-screen conversation with a back button (the browser's Back
+button works too). It reuses the two cards above, so voice, video, pictures,
+files and read receipts behave exactly as before.
+
+```yaml
+views:
+  - title: Messenger
+    path: messenger
+    type: panel
+    cards:
+      - type: custom:simplex-messenger-card
+        glass_intensity: balanced   # off | subtle | balanced | strong
+```
+
+| Option | Default | |
+|--------|---------|--|
+| `glass_intensity` | `balanced` | `off` disables the blur: use it on wall tablets and older phones |
+| `show_branding` | `true` | SimpleX header bar |
+| `title` | *Conversations* | Title of the list |
+| `show_search` | `true` | Search box of the list |
+| `history_limit`, `auto_mark_read`, `entry_id`, `connection_entity` | as the chat card | Forwarded to the cards |
+| `navigate_prefix` | *auto* | Path of **the view hosting the card**. Detected from the URL; only set it if you know why |
+
+> ⚠️ `navigate_prefix`, when set, must be the path of the view that contains the
+> messenger (`/<dashboard>/messenger`). Pointing it elsewhere makes Home Assistant
+> leave the view on every click. The shipped dashboards leave it out.
+
+The easiest way in is *Configure → Install a dashboard → `simplex_messenger_fr`
+(or `_en`)*. The card also has a visual editor.
 
 ---
 
