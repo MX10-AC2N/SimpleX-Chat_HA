@@ -68,3 +68,29 @@ jobs:
 
       - name: Compile all integration modules
         run: python3 -m compileall -q custom_components/simplex
+
+  frontend:
+    name: Messenger bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/messenger/package-lock.json
+
+      - name: Type-check and build
+        working-directory: frontend/messenger
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
+
+      # HACS ships the repository as is (no build step), so the committed
+      # bundle must be the one produced by the sources.
+      - name: Committed bundle is up to date
+        run: |
+          git diff --exit-code -- custom_components/simplex/cards/simplex-messenger-card \
+            || (echo "❌ Run 'npm run build' in frontend/messenger and commit the bundle." && exit 1)
