@@ -234,6 +234,8 @@ install_dashboard:
       selector:
         select:
           options:
+            - simplex_messenger_fr
+            - simplex_messenger_en
             - simplex_auto_fr
             - simplex_auto_en
             - simplex_fr

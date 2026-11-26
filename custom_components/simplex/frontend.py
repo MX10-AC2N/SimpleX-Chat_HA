@@ -29,6 +29,8 @@ _FLAG = "cards_registered"
 CATALOG: dict[str, tuple[str, str]] = {
     "simplex_auto_fr": ("SimpleX (auto, FR)", "mdi:message-lock"),
     "simplex_auto_en": ("SimpleX (auto, EN)", "mdi:message-lock"),
+    "simplex_messenger_fr": ("SimpleX Messenger (FR)", "mdi:message-lock"),
+    "simplex_messenger_en": ("SimpleX Messenger (EN)", "mdi:message-lock"),
     "simplex_fr": ("SimpleX Chat (FR)", "mdi:message-text"),
     "simplex_en": ("SimpleX Chat (EN)", "mdi:message-text"),
     "simplex_mushroom_fr": ("SimpleX Mushroom (FR)", "mdi:mushroom"),
