@@ -1,0 +1,59 @@
+# Écran d'accueil façon appli SimpleX Android : liste des conversations,
+# puis un onglet "fil de discussion". Nécessite v2.2+ :
+#   - custom:simplex-conversations-card (cards/simplex-conversations-card/)
+#   - custom:simplex-chat-card          (cards/simplex-chat-card/)
+#
+# thanks à l'auto-découverte de l'intégration, AUCUNE vue n'est à déclarer
+# par contact : la liste se remplit toute seule et la vue de discussion est
+# générique (elle lit l'alias dans le fragment de l'URL, après le "#").
+#
+# Le préfixe de navigation doit contenir le slug du tableau de bord
+# ("/simplex/") puis le "path:" de la vue ("simplex-chat").
+#
+# Si tu préfères une vue dédiée par contact (ex. pour un accès direct par
+# lien), garde les blocs "par contact" en fin de fichier et passe le
+# conversations card en navigate_mode: path.
+
+title: SimpleX
+views:
+  - title: Conversations
+    path: simplex-home
+    icon: mdi:chat
+    type: panel
+    cards:
+      - type: custom:simplex-conversations-card
+        title: SimpleX
+        navigate_prefix: /simplex/simplex-chat
+        navigate_mode: hash
+
+  - title: Conversation
+    path: simplex-chat
+    icon: mdi:message-text-outline
+    type: panel
+    cards:
+      - type: custom:simplex-chat-card
+        alias: auto
+        history_limit: 50
+
+  # ---------- Vue dédiée par contact (optionnel) ----------
+  # Décommente et adapte les alias si tu veux un accès direct par contact.
+  #
+  # - title: Famille
+  #   path: simplex-family
+  #   icon: mdi:account-group
+  #   type: panel
+  #   cards:
+  #     - type: custom:simplex-chat-card
+  #       alias: family
+  #       title: Famille
+  #       history_limit: 50
+  #
+  # - title: Alice
+  #   path: simplex-alice
+  #   icon: mdi:account
+  #   type: panel
+  #   cards:
+  #     - type: custom:simplex-chat-card
+  #       alias: alice
+  #       title: Alice
+  #       history_limit: 50

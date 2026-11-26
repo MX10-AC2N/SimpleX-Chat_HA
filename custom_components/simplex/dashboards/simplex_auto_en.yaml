@@ -1,0 +1,42 @@
+# SimpleX Chat — dynamic home screen (EN)
+# -----------------------------------------------------------------------
+# This dashboard works with NO contact configuration: it relies on the
+# integration's auto-discovery (the bot's SimpleX contacts and groups
+# are detected automatically).
+#
+# Only two views:
+#   1. simplex-home  → the conversation list (filled dynamically)
+#   2. simplex-chat  → ONE generic view showing the conversation picked
+#                       in the list
+#
+# How it works: the "conversations" card navigates to
+# /simplex-chat#<alias>; the fragment (#) carries the alias, so it
+# survives a page reload. The chat card reads that fragment.
+# → No view to declare per contact anymore!
+#
+# Cards: loaded automatically by the SimpleX Chat integration / chargées automatiquement par l'intégration.
+
+title: SimpleX
+views:
+  - title: Conversations
+    path: simplex-home
+    icon: mdi:message-lock
+    type: panel
+    cards:
+      - type: custom:simplex-conversations-card
+        title: SimpleX
+        # Navigation prefix: must match the "path:" of the view below.
+        # The alias is appended after the "#".
+        navigate_prefix: /simplex-chat
+        navigate_mode: hash
+
+  - title: Conversation
+    path: simplex-chat
+    icon: mdi:chat
+    type: panel
+    cards:
+      - type: custom:simplex-chat-card
+        # "auto" → the alias is read from the URL (#alias). A single
+        # view is enough for every contact.
+        alias: auto
+        history_limit: 50

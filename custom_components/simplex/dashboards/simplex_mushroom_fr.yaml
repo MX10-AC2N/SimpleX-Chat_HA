@@ -1,0 +1,366 @@
+# SimpleX Chat – dashboard Lovelace (Mushroom + auto-entities)
+# Cards: loaded automatically by the SimpleX Chat integration / chargées automatiquement par l'intégration.
+
+title: SimpleX Chat
+views:
+  - title: SimpleX
+    path: simplex
+    icon: mdi:message-lock-outline
+    type: sections
+    max_columns: 3
+    dense_section_placement: true
+    sections:
+
+      # ═══════════════════════════════════════════
+      # Hero / statut
+      # ═══════════════════════════════════════════
+      - type: grid
+        column_span: 3
+        cards:
+          - type: custom:mushroom-title-card
+            title: SimpleX Chat
+            subtitle: Messagerie privée · notifications HA
+
+          - type: horizontal-stack
+            cards:
+              - type: custom:mushroom-template-card
+                primary: "{{ 'Connecté' if is_state('binary_sensor.simplex_chat_connection', 'on') else 'Hors ligne' }}"
+                secondary: WebSocket
+                icon: "{{ 'mdi:lan-connect' if is_state('binary_sensor.simplex_chat_connection', 'on') else 'mdi:lan-disconnect' }}"
+                icon_color: "{{ 'green' if is_state('binary_sensor.simplex_chat_connection', 'on') else 'red' }}"
+                layout: horizontal
+                tap_action:
+                  action: more-info
+                  entity: binary_sensor.simplex_chat_connection
+                card_mod:
+                  style: |
+                    ha-card {
+                      background: {% if is_state('binary_sensor.simplex_chat_connection', 'on') %}
+                        linear-gradient(135deg, rgba(56,142,60,0.18), rgba(56,142,60,0.05));
+                      {% else %}
+                        linear-gradient(135deg, rgba(211,47,47,0.18), rgba(211,47,47,0.05));
+                      {% endif %}
+                      border-radius: 16px;
+                    }
+
+              - type: custom:mushroom-template-card
+                primary: "{{ states('sensor.simplex_chat_configured_contacts') | int(0) }}"
+                secondary: Contacts HA
+                icon: mdi:account-multiple-outline
+                icon_color: indigo
+                layout: horizontal
+                tap_action:
+                  action: more-info
+                  entity: sensor.simplex_chat_configured_contacts
+                card_mod:
+                  style: |
+                    ha-card {
+                      background: linear-gradient(135deg, rgba(63,81,181,0.16), rgba(63,81,181,0.04));
+                      border-radius: 16px;
+                    }
+
+              - type: custom:mushroom-template-card
+                primary: "{{ 'Actif' if states('sensor.simplex_chat_last_message') not in ['unknown','unavailable','none',''] else 'En attente' }}"
+                secondary: Dernier message
+                icon: mdi:message-text-outline
+                icon_color: cyan
+                layout: horizontal
+                tap_action:
+                  action: more-info
+                  entity: sensor.simplex_chat_last_message
+                card_mod:
+                  style: |
+                    ha-card {
+                      background: linear-gradient(135deg, rgba(0,188,212,0.16), rgba(0,188,212,0.04));
+                      border-radius: 16px;
+                    }
+
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: binary_sensor.simplex_chat_connection
+                state_not: "on"
+            card:
+              type: custom:mushroom-template-card
+              primary: SimpleX n’est pas joignable
+              secondary: Vérifie le conteneur / CLI (ws://…:5225) · voir DOCKER.md
+              icon: mdi:alert-circle-outline
+              icon_color: amber
+              multiline_secondary: true
+              layout: horizontal
+              card_mod:
+                style: |
+                  ha-card {
+                    background: linear-gradient(135deg, rgba(255,152,0,0.2), rgba(255,152,0,0.05));
+                    border-radius: 16px;
+                  }
+
+      # ═══════════════════════════════════════════
+      # Dernier message
+      # ═══════════════════════════════════════════
+      - type: grid
+        cards:
+          - type: custom:mushroom-title-card
+            title: Boîte de réception
+            subtitle: Dernier message reçu
+
+          - type: custom:mushroom-template-card
+            primary: >-
+              {% set a = state_attr('sensor.simplex_chat_last_message', 'alias') %}
+              {{ a if a else 'Aucun expéditeur' }}
+            secondary: >-
+              {% set s = states('sensor.simplex_chat_last_message') %}
+              {% if s not in ['unknown', 'unavailable', 'none', ''] %}
+                {{ s }}
+              {% else %}
+                En attente d’un message entrant…
+              {% endif %}
+            icon: mdi:inbox-arrow-down
+            icon_color: teal
+            multiline_secondary: true
+            fill_container: true
+            layout: vertical
+            tap_action:
+              action: more-info
+              entity: sensor.simplex_chat_last_message
+            card_mod:
+              style: |
+                ha-card {
+                  min-height: 120px;
+                  border-radius: 18px;
+                  background: linear-gradient(160deg, rgba(0,150,136,0.12), rgba(0,0,0,0));
+                }
+
+          - type: custom:mushroom-chips-card
+            alignment: center
+            chips:
+              - type: entity
+                entity: sensor.simplex_chat_last_message
+                content_info: none
+                icon: mdi:identifier
+              - type: template
+                icon: mdi:at
+                content: >-
+                  {{ state_attr('sensor.simplex_chat_last_message', 'chat_ref') or '—' }}
+              - type: template
+                icon: mdi:clock-outline
+                content: >-
+                  {{ relative_time(states.sensor.simplex_chat_last_message.last_changed) if states.sensor.simplex_chat_last_message is defined else '—' }}
+
+      # ═══════════════════════════════════════════
+      # Actions rapides
+      # ═══════════════════════════════════════════
+      - type: grid
+        cards:
+          - type: custom:mushroom-title-card
+            title: Actions
+            subtitle: Invitations & configuration
+
+          - type: custom:mushroom-template-card
+            primary: Créer une invitation
+            secondary: Lien généré par le bot · à ouvrir dans l’app SimpleX
+            icon: mdi:qrcode-plus
+            icon_color: deep-purple
+            layout: horizontal
+            multiline_secondary: true
+            tap_action:
+              action: call-service
+              service: simplex.create_invite
+            hold_action:
+              action: navigate
+              navigation_path: /developer-tools/service
+            card_mod:
+              style: |
+                ha-card {
+                  border-radius: 16px;
+                  background: linear-gradient(135deg, rgba(103,58,183,0.18), rgba(103,58,183,0.04));
+                }
+
+          - type: custom:mushroom-template-card
+            primary: Lister les contacts CLI
+            secondary: Contacts connus du daemon SimpleX
+            icon: mdi:format-list-bulleted
+            icon_color: blue-grey
+            layout: horizontal
+            tap_action:
+              action: call-service
+              service: simplex.list_contacts
+            card_mod:
+              style: |
+                ha-card { border-radius: 16px; }
+
+          - type: custom:mushroom-template-card
+            primary: Configurer l’intégration
+            secondary: Ajouter / retirer un contact (lien d’invitation)
+            icon: mdi:cog-outline
+            icon_color: grey
+            layout: horizontal
+            tap_action:
+              action: navigate
+              navigation_path: /config/integrations/integration/simplex
+            card_mod:
+              style: |
+                ha-card { border-radius: 16px; }
+
+          - type: custom:mushroom-chips-card
+            alignment: center
+            chips:
+              - type: action
+                icon: mdi:tools
+                content: Actions HA
+                tap_action:
+                  action: navigate
+                  navigation_path: /developer-tools/service
+              - type: action
+                icon: mdi:text-box-search
+                content: Journaux
+                tap_action:
+                  action: navigate
+                  navigation_path: /config/logs
+              - type: action
+                icon: mdi:github
+                content: Docs
+                tap_action:
+                  action: url
+                  url_path: https://github.com/MX10-AC2N/SimpleX-Chat_HA
+
+      # ═══════════════════════════════════════════
+      # Destinataires notify (auto-entities)
+      # ═══════════════════════════════════════════
+      - type: grid
+        column_span: 2
+        cards:
+          - type: custom:mushroom-title-card
+            title: Destinataires
+            subtitle: Entités notify.simplex_chat_* · envoi rapide
+
+          - type: custom:auto-entities
+            card:
+              type: grid
+              columns: 2
+              square: false
+            card_param: cards
+            filter:
+              include:
+                - domain: notify
+                  entity_id: "*simplex*"
+                  options:
+                    type: custom:mushroom-template-card
+                    primary: "{{ state_attr(config.entity, 'friendly_name') or config.entity }}"
+                    secondary: "{{ config.entity }}"
+                    icon: mdi:message-arrow-right-outline
+                    icon_color: "#00B0FF"
+                    layout: horizontal
+                    tap_action:
+                      action: more-info
+                    hold_action:
+                      action: call-service
+                      service: notify.send_message
+                      target:
+                        entity_id: this.entity_id
+                      data:
+                        message: "Test SimpleX depuis le dashboard HA"
+                        title: Home Assistant
+                    card_mod:
+                      style: |
+                        ha-card {
+                          border-radius: 14px;
+                          transition: transform 0.15s ease;
+                        }
+                        ha-card:active { transform: scale(0.98); }
+              exclude: []
+            sort:
+              method: friendly_name
+            show_empty: true
+            empty_card:
+              type: custom:mushroom-template-card
+              primary: Aucun contact notify
+              secondary: Configure l’intégration → Ajouter un contact (lien d’invitation)
+              icon: mdi:account-plus-outline
+              icon_color: disabled
+              layout: horizontal
+              tap_action:
+                action: navigate
+                navigation_path: /config/integrations/integration/simplex
+              card_mod:
+                style: |
+                  ha-card {
+                    border-radius: 14px;
+                    border: 1px dashed rgba(127,127,127,0.35);
+                  }
+
+      # ═══════════════════════════════════════════
+      # Envoi manuel (formulaire simple)
+      # ═══════════════════════════════════════════
+      - type: grid
+        cards:
+          - type: custom:mushroom-title-card
+            title: Envoi rapide
+            subtitle: Service simplex.send_message
+
+          - type: entities
+            show_header_toggle: false
+            state_color: false
+            entities:
+              - type: attribute
+                entity: sensor.simplex_chat_configured_contacts
+                name: Contacts prêts
+            card_mod:
+              style: |
+                ha-card { border-radius: 16px; }
+
+          - type: markdown
+            content: |
+              > **Astuce**  
+              > Appui **long** sur une carte destinataire = message de test.  
+              > Pour un envoi personnalisé : *Outils de développement → Actions*  
+              > → `notify.send_message` ou `simplex.send_message`.
+            card_mod:
+              style: |
+                ha-card {
+                  border-radius: 16px;
+                  background: rgba(127,127,127,0.06);
+                }
+
+      # ═══════════════════════════════════════════
+      # Aide compacte
+      # ═══════════════════════════════════════════
+      - type: grid
+        column_span: 3
+        cards:
+          - type: custom:mushroom-title-card
+            title: Guide express
+            subtitle: De zéro au premier message
+
+          - type: custom:mushroom-template-card
+            primary: 1 · Daemon WS
+            secondary: Conteneur simplex-bridge ou `simplex-chat -p 5225` · URL dans l’intégration
+            icon: mdi:numeric-1-circle
+            icon_color: "#5C6BC0"
+            layout: horizontal
+            multiline_secondary: true
+            card_mod:
+              style: |
+                ha-card { border-radius: 14px; }
+
+          - type: custom:mushroom-template-card
+            primary: 2 · Invitation
+            secondary: Bouton « Créer une invitation » puis ouvrir le lien dans l’app SimpleX
+            icon: mdi:numeric-2-circle
+            icon_color: "#7E57C2"
+            layout: horizontal
+            multiline_secondary: true
+            card_mod:
+              style: |
+                ha-card { border-radius: 14px; }
+
+          - type: custom:mushroom-template-card
+            primary: 3 · Notifier
+            secondary: Les cartes Destinataires apparaissent après ajout d’un contact
+            icon: mdi:numeric-3-circle
+            icon_color: "#26A69A"
+            layout: horizontal
+            multiline_secondary: true
+            card_mod:
+              style: |
+                ha-card { border-radius: 14px; }
