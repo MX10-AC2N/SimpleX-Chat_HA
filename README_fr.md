@@ -33,7 +33,7 @@ murale, et une cible pour les assistants vocaux et les agents IA.
 - 📇 Un device par contact : dernier message, compteur de non-lus, connectivité
 - 🧩 10 services : envoi, recherche, statistiques, invitations, rafraîchissement, marquer comme lu…
 - 🤖 Deux outils Assist/LLM : `send_simplex_message` et `search_simplex_messages`
-- 📦 9 tableaux de bord prêts à l'emploi, du mur d'état au messager façon application
+- 📦 11 tableaux de bord prêts à l'emploi, du mur d'état au messager Glass
 - 🌍 Français et anglais
 
 ---
@@ -97,7 +97,7 @@ Détails : **[docs/dashboards.md](docs/dashboards.md)**.
 | 📦 **[Installation](docs/installation.md)** | HACS, manuel, Docker, configuration du bridge |
 | ⚙️ **[Configuration](docs/configuration.md)** | Auto-découverte, alias, contacts manuels |
 | 💬 **[Utilisation](docs/usage.md)** | Services, événements, entités, recherche, images, statistiques, LLM |
-| 🗂 **[Tableaux de bord & cartes](docs/dashboards.md)** | Les 9 tableaux de bord, dépendances, mode dynamique |
+| 🗂 **[Tableaux de bord & cartes](docs/dashboards.md)** | Les 11 tableaux de bord, le Messenger Glass, dépendances, mode dynamique |
 | 🩺 **[Dépannage](docs/troubleshooting.md)** | Par symptôme : cartes vides, aucun message, compteurs à zéro… |
 | 🛠 **[Développement](docs/development.md)** | Architecture, modules, tests, feuille de route |
 

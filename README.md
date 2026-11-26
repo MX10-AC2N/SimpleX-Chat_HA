@@ -33,7 +33,7 @@ assistants and AI agents.
 - 📇 One device per contact: last message, unread counter, connectivity
 - 🧩 10 services: send, search, statistics, invitations, refresh, mark as read…
 - 🤖 Two Assist/LLM tools: `send_simplex_message` and `search_simplex_messages`
-- 📦 9 ready-to-use dashboards, from a status wall to an app-like messenger
+- 📦 11 ready-to-use dashboards, from a status wall to a Glass messenger
 - 🌍 English and French
 
 ---
@@ -96,7 +96,7 @@ Full details: **[docs/dashboards.md](docs/dashboards.md)**.
 | 📦 **[Installation](docs/installation.md)** | HACS, manual, Docker, bridge configuration |
 | ⚙️ **[Configuration](docs/configuration.md)** | Auto-discovery, aliases, manual contacts |
 | 💬 **[Usage](docs/usage.md)** | Services, events, entities, search, images, statistics, LLM |
-| 🗂 **[Dashboards & cards](docs/dashboards.md)** | The 9 dashboards, dependencies, dynamic mode |
+| 🗂 **[Dashboards & cards](docs/dashboards.md)** | The 11 dashboards, the Glass Messenger, dependencies, dynamic mode |
 | 🩺 **[Troubleshooting](docs/troubleshooting.md)** | By symptom: blank cards, no message, counters at zero… |
 | 🛠 **[Development](docs/development.md)** | Architecture, modules, tests, roadmap |
 
