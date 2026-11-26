@@ -62,7 +62,7 @@ Running Home Assistant in Docker? The CLI runs in a separate container:
 - **SimpleX Chat CLI** in WebSocket mode (`simplex-chat -p 5225`)
 - Home Assistant **2025.8+**
 
-The dashboards additionally need two community Lovelace cards — see below.
+The three SimpleX Lovelace cards (with a visual editor) and the dashboards ship with the integration — install a dashboard in one click from *Configure → Install a dashboard*.
 
 ---
 
