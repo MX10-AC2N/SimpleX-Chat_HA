@@ -20,6 +20,12 @@ const SIMPLEX_EDITOR_LABELS = {
     default_alias: ["Default recipient", ""],
     hash: "Hash (#alias)",
     path: "Path (/alias)",
+    show_branding: ["Show the SimpleX header", ""],
+    glass_intensity: ["Glass effect", "“off” disables the blur (wall tablets, older phones)."],
+    glass_off: "Off (no blur)",
+    glass_subtle: "Subtle",
+    glass_balanced: "Balanced",
+    glass_strong: "Strong",
   },
   fr: {
     alias: ["Alias du contact / groupe", "Laisser vide ou « auto » pour suivre la conversation choisie dans la liste."],
@@ -35,6 +41,12 @@ const SIMPLEX_EDITOR_LABELS = {
     default_alias: ["Destinataire par défaut", ""],
     hash: "Hash (#alias)",
     path: "Chemin (/alias)",
+    show_branding: ["Afficher l'en-tête SimpleX", ""],
+    glass_intensity: ["Effet Glass", "« off » désactive le flou (tablettes murales, vieux téléphones)."],
+    glass_off: "Désactivé (sans flou)",
+    glass_subtle: "Discret",
+    glass_balanced: "Équilibré",
+    glass_strong: "Intense",
   },
 };
 
@@ -68,6 +80,30 @@ const SIMPLEX_EDITOR_SCHEMAS = {
     { name: "show_search", selector: { boolean: {} } },
     { name: "entry_id", selector: _ENTRY },
   ],
+  messenger: (t) => [
+    { name: "title", selector: { text: {} } },
+    { name: "show_branding", selector: { boolean: {} } },
+    {
+      name: "glass_intensity",
+      selector: {
+        select: {
+          mode: "dropdown",
+          options: [
+            { value: "off", label: t.glass_off },
+            { value: "subtle", label: t.glass_subtle },
+            { value: "balanced", label: t.glass_balanced },
+            { value: "strong", label: t.glass_strong },
+          ],
+        },
+      },
+    },
+    { name: "show_search", selector: { boolean: {} } },
+    { name: "history_limit", selector: { number: { min: 10, max: 500, step: 10, mode: "box" } } },
+    { name: "auto_mark_read", selector: { boolean: {} } },
+    { name: "navigate_prefix", selector: { text: {} } },
+    { name: "entry_id", selector: _ENTRY },
+    { name: "connection_entity", selector: _CONN },
+  ],
   intercom: () => [
     { name: "title", selector: { text: {} } },
     { name: "aliases", selector: { text: { multiple: true } } },
@@ -81,6 +117,7 @@ const SIMPLEX_EDITOR_SCHEMAS = {
 const SIMPLEX_EDITOR_DEFAULTS = {
   chat: { alias: "auto", history_limit: 50, auto_mark_read: true },
   conversations: { navigate_mode: "hash", show_search: true },
+  messenger: { show_branding: true, glass_intensity: "balanced", show_search: true, history_limit: 50, auto_mark_read: true },
   intercom: {},
 };
 
@@ -138,7 +175,7 @@ class SimplexCardEditor extends HTMLElement {
   }
 }
 
-for (const kind of ["chat", "conversations", "intercom"]) {
+for (const kind of ["chat", "conversations", "messenger", "intercom"]) {
   const tag = `simplex-${kind}-card-editor`;
   if (!customElements.get(tag)) {
     customElements.define(tag, class extends SimplexCardEditor { constructor() { super(kind); } });
