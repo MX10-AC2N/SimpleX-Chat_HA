@@ -374,7 +374,7 @@ class TestEntityIdMigration(unittest.TestCase):
         import pathlib
 
         root = pathlib.Path(__file__).resolve().parent.parent
-        dashboards = root / "dashboards"
+        dashboards = root / "custom_components" / "simplex" / "dashboards"
         referenced: set[str] = set()
         for path in dashboards.glob("*.yaml"):
             text = path.read_text(encoding="utf-8")
