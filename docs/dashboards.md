@@ -1,8 +1,26 @@
 # Dashboards & cards
 
-Nine ready-to-use dashboards ship in [`dashboards/`](../dashboards). They are
-optional — the integration works on its own — but they need two community
-Lovelace cards, which you must install first.
+Nine ready-to-use dashboards ship **inside the integration**
+([`custom_components/simplex/dashboards/`](../custom_components/simplex/dashboards)).
+They are optional — the integration works on its own. The three SimpleX cards are
+installed for you; Mushroom / Auto Entities (see below) are only needed by some.
+
+## One-click install
+
+*Settings → Devices & services → SimpleX Chat → Configure → **Install a dashboard***,
+or:
+
+```yaml
+action: simplex.install_dashboard
+data:
+  dashboard: simplex_auto_fr   # any file name from the list below, without .yaml
+  url_path: simplex-auto-fr    # optional, must contain a hyphen
+  overwrite: false             # true = replace an existing UI-mode dashboard
+```
+
+Administrators only. It creates a sidebar dashboard, rewrites the chat navigation
+to the new URL, never writes to YAML-mode dashboards and never overwrites without
+`overwrite: true`.
 
 ---
 
@@ -47,18 +65,18 @@ or copy the YAML into a view of your own.
 
 ---
 
-## Installing the custom cards
+## The custom cards (installed automatically)
 
-The app-like dashboards need two Lovelace cards. Copy them to `/config/www/`
-and register them under *Settings → Dashboards → Resources*:
+The integration serves the three cards and loads them in the frontend: nothing to
+copy to `/config/www`, no Lovelace resource to declare. Hard-refresh the browser
+(Ctrl+F5) after an update. Resources you added by hand as `/local/...` can be
+removed; keeping them is harmless.
 
-```
-/config/www/simplex-conversations-card/simplex-conversations-card.js
-/config/www/simplex-chat-card/simplex-chat-card.js
-```
+### Visual editor — no YAML needed
 
-Both as **JavaScript Module**. The wall-tablet dashboard additionally needs
-`/config/www/simplex-intercom-card/simplex-intercom-card.js`.
+Add a card → search **SimpleX** → fill in the form: contact alias, title, history
+size, SimpleX instance (picker), connection sensor (picker), navigation mode,
+recipients… The editor follows your language (English / French).
 
 ---
 

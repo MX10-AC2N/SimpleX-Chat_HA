@@ -25,9 +25,9 @@ missing.
 
 ## The conversations card is empty
 
-The app-like dashboards need the three SimpleX cards in `/config/www/`
-(see [Installing the custom cards](dashboards.md#installing-the-custom-cards))
-**and** the `simplex-conversations-card` resource registered.
+The three SimpleX cards are loaded by the integration itself. Hard-refresh the
+browser (Ctrl+F5); if the card is still unknown, check the log for
+`Could not register the SimpleX Lovelace cards` and that the *Frontend* integration is loaded.
 
 If the list stays empty, check that auto-discovery worked —
 `sensor.simplex_chat_discovered_contacts` must be greater than 0. If it is
