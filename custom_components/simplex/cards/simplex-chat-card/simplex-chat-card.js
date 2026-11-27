@@ -460,7 +460,7 @@ class SimplexChatCard extends HTMLElement {
         .header .sub { font-size: 0.78em; opacity: 0.7; }
         .header .sub.offline { color: #e0a06a; opacity: 1; }
         .header .read-btn {
-          border: none; background: #2f9e6f; color: #fff;
+          border: none; background: var(--simplex-accent, #2f9e6f); color: #fff;
           border-radius: 14px; padding: 4px 10px; font-size: 0.75em;
           cursor: pointer; flex: 0 0 auto;
         }
@@ -483,7 +483,7 @@ class SimplexChatCard extends HTMLElement {
           margin: 10px 0 4px;
           padding: 2px 10px;
           border-radius: 10px;
-          background: rgba(255,255,255,0.08);
+          background: var(--simplex-day-sep-bg, rgba(255,255,255,0.08));
           color: #9fb3ba;
           font-size: 0.72em;
         }
@@ -491,7 +491,7 @@ class SimplexChatCard extends HTMLElement {
         .bubble {
           max-width: 75%;
           padding: 7px 10px 6px 10px;
-          border-radius: 10px;
+          border-radius: var(--simplex-bubble-radius, 10px);
           font-size: 0.92em;
           line-height: 1.32;
           position: relative;
@@ -540,22 +540,24 @@ class SimplexChatCard extends HTMLElement {
           flex: 0 0 auto;
           display: flex; align-items: center; gap: 8px;
           padding: 8px 10px;
-          background: var(--simplex-header-bg, #1b2b34);
+          background: var(--simplex-composer-bg, var(--simplex-header-bg, #1b2b34));
         }
         .composer input[type="text"] {
           flex: 1; border: none; border-radius: 18px;
           padding: 9px 14px; font-size: 0.95em;
-          background: #0f1b21; color: #eef3f5;
+          background: var(--simplex-input-bg, #0f1b21); color: #eef3f5;
         }
+        .composer input[type="text"]:focus-visible { outline: 2px solid var(--simplex-accent, #2f9e6f); outline-offset: 1px; }
         .composer input[type="text"]::placeholder { color: #7d939a; }
         .icon-btn {
           width: 38px; height: 38px; border-radius: 50%; border: none;
-          background: #223139; color: #cfe3e9;
+          background: var(--simplex-surface, #223139); color: #cfe3e9;
           display: flex; align-items: center; justify-content: center;
           cursor: pointer; flex: 0 0 auto;
         }
         .icon-btn.recording { background: #c0493e; color: #fff; animation: pulse 1.2s infinite; }
-        .icon-btn.send { background: #2f9e6f; color: #fff; }
+        .icon-btn.send { background: var(--simplex-accent, #2f9e6f); color: #fff; }
+        .icon-btn:focus-visible { outline: 2px solid var(--simplex-accent, #2f9e6f); outline-offset: 2px; }
         .icon-btn svg { width: 19px; height: 19px; fill: currentColor; }
         @keyframes pulse { 0%{opacity:1;} 50%{opacity:0.55;} 100%{opacity:1;} }
 
