@@ -62,6 +62,7 @@ class SimplexConversationsCard extends HTMLElement {
     this._loaded = false;
     this._filter = "";
     this._mode = "list"; // "list" | "search"
+    this._onNav = () => this._markActive();
     this._searchResults = null;
     this._searchCount = 0;
     this._searching = false;
@@ -108,6 +109,8 @@ class SimplexConversationsCard extends HTMLElement {
   }
 
   connectedCallback() {
+    window.addEventListener("popstate", this._onNav);
+    window.addEventListener("hashchange", this._onNav);
     // Home Assistant detaches/re-attaches cards (view switch, edit mode);
     // `set hass` only subscribes once, so re-subscribe and catch up on what
     // was missed while detached.
@@ -118,6 +121,8 @@ class SimplexConversationsCard extends HTMLElement {
   }
 
   disconnectedCallback() {
+    window.removeEventListener("popstate", this._onNav);
+    window.removeEventListener("hashchange", this._onNav);
     this._subscribed = false;
     if (this._reloadTimer) {
       window.clearTimeout(this._reloadTimer);
@@ -199,12 +204,13 @@ class SimplexConversationsCard extends HTMLElement {
         .search input {
           flex: 1 1 auto; min-width: 0; box-sizing: border-box;
           padding: 8px 12px; border-radius: 18px; border: none;
-          background: rgba(255,255,255,0.08); color: #eef3f5; font-size: 0.9em;
+          background: var(--simplex-input-bg, rgba(255,255,255,0.08)); color: #eef3f5; font-size: 0.9em;
         }
+        .search input:focus-visible { outline: 2px solid var(--simplex-accent, #2f9e6f); outline-offset: 1px; }
         .search input::placeholder { color: #7d939a; }
         .search button {
           flex: 0 0 auto; border: none; border-radius: 18px;
-          padding: 0 12px; background: #2f9e6f; color: #fff; cursor: pointer;
+          padding: 0 12px; background: var(--simplex-accent, #2f9e6f); color: #fff; cursor: pointer;
           font-size: 0.85em;
         }
         .search button:disabled { background: #3b4c55; cursor: default; }
@@ -226,8 +232,9 @@ class SimplexConversationsCard extends HTMLElement {
           padding: 10px 16px; cursor: pointer;
           border-bottom: 1px solid rgba(255,255,255,0.05);
         }
-        .row:hover { background: rgba(255,255,255,0.04); }
-        .row.unread { background: rgba(63,179,127,0.10); }
+        .row:hover { background: var(--simplex-row-hover, rgba(255,255,255,0.04)); }
+        .row.unread { background: var(--simplex-row-unread, rgba(63,179,127,0.10)); }
+        .row.active { background: var(--simplex-row-active, transparent); box-shadow: inset 3px 0 0 var(--simplex-row-active-bar, transparent); }
         .row.unread .name { font-weight: 700; }
         .avatar {
           width: 44px; height: 44px; border-radius: 50%; flex: 0 0 auto;
@@ -253,7 +260,7 @@ class SimplexConversationsCard extends HTMLElement {
           overflow: hidden; text-overflow: ellipsis;
         }
         .badge {
-          background: #2f9e6f; color: #fff; border-radius: 10px;
+          background: var(--simplex-accent, #2f9e6f); color: #fff; border-radius: 10px;
           min-width: 18px; height: 18px; padding: 0 5px;
           font-size: 0.72em; display: flex; align-items: center; justify-content: center;
           flex: 0 0 auto;
@@ -483,7 +490,7 @@ class SimplexConversationsCard extends HTMLElement {
         const face = c.type === "group" ? "👥" : this._initial(c.name);
         const avatar = `<div class="avatar${c.type === "group" ? " group" : ""}" style="background:${this._avatarColor(c.alias)}">${face}${dot}</div>`;
         return `
-          <div class="row${unread ? " unread" : ""}" data-alias="${this._escape(c.alias)}">
+          <div class="row${unread ? " unread" : ""}${this._isActive(c.alias) ? " active" : ""}" data-alias="${this._escape(c.alias)}">
             ${avatar}
             <div class="body">
               <div class="name-row">
@@ -521,6 +528,35 @@ class SimplexConversationsCard extends HTMLElement {
     return AVATAR_COLORS[hash % AVATAR_COLORS.length];
   }
 
+  // Alias of the conversation currently open (URL hash, else the copy the list
+  // itself stored). Lets a messenger layout highlight the selected row.
+  _activeAlias() {
+    let alias = "";
+    try {
+      alias = decodeURIComponent(window.location.hash.replace(/^#/, ""));
+    } catch (e) {
+      /* malformed hash */
+    }
+    if (!alias) {
+      try {
+        alias = window.sessionStorage.getItem("simplex_chat_alias") || "";
+      } catch (e) {
+        /* private mode */
+      }
+    }
+    return alias;
+  }
+
+  _isActive(alias) {
+    return Boolean(alias) && alias === this._activeAlias();
+  }
+
+  _markActive() {
+    const rows = this.shadowRoot && this.shadowRoot.querySelectorAll(".rows .row[data-alias]");
+    if (!rows) return;
+    rows.forEach((r) => r.classList.toggle("active", this._isActive(r.dataset.alias)));
+  }
+
   _onRowClick(alias) {
     if (!this._config.navigate_prefix || !alias) return;
     // Belt-and-braces: Home Assistant owns the router and may normalise the
@@ -541,6 +577,7 @@ class SimplexConversationsCard extends HTMLElement {
     );
     window.history.pushState(null, "", path);
     window.dispatchEvent(new PopStateEvent("popstate"));
+    this._markActive();
   }
 
   _formatTime(ts) {
