@@ -73,6 +73,16 @@ class TestBundle(unittest.TestCase):
             self.assertTrue(cfg["views"])
             self.assertIn("-", frontend.default_url_path(name))
 
+    def test_card_theme_variables_keep_their_fallback(self):
+        """The Messenger themes the cards through --simplex-* variables; every
+        use must carry the historical colour as fallback so that the other
+        dashboards render exactly as before."""
+        import re
+
+        for card in ("simplex-chat-card", "simplex-conversations-card"):
+            src = (DASHBOARDS_DIR.parent / "cards" / card / f"{card}.js").read_text(encoding="utf-8")
+            self.assertIsNone(re.search(r"var\(--simplex-[\w-]+\)", src), card)
+
     def test_service_picker_offers_every_dashboard(self):
         import re
 
