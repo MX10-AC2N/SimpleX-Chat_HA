@@ -211,11 +211,20 @@ class SimplexMessengerCard extends LitElement {
       simplex-chat-card {
         display: block;
         --simplex-bg: transparent;
+        --simplex-accent: #25a67b;
+        --simplex-input-bg: rgba(255, 255, 255, 0.075);
         --ha-card-background: transparent;
         --ha-card-box-shadow: none;
         --ha-card-border-width: 0;
         --ha-card-border-radius: 0;
         --ha-card-border-color: transparent;
+      }
+
+      simplex-conversations-card {
+        --simplex-row-hover: rgba(255, 255, 255, 0.045);
+        --simplex-row-unread: rgba(112, 224, 189, 0.07);
+        --simplex-row-active: rgba(112, 224, 189, 0.13);
+        --simplex-row-active-bar: var(--sx-glass-accent);
       }
 
       simplex-chat-card {
@@ -224,8 +233,13 @@ class SimplexMessengerCard extends LitElement {
         width: 100%;
         --simplex-card-height: 100%;
         --simplex-header-bg: rgba(255, 255, 255, 0.045);
+        --simplex-composer-bg: rgba(255, 255, 255, 0.04);
+        --simplex-surface: rgba(255, 255, 255, 0.085);
+        --simplex-day-sep-bg: rgba(255, 255, 255, 0.07);
+        --simplex-bubble-radius: 16px;
         --simplex-bubble-in: rgba(255, 255, 255, 0.1);
-        --simplex-bubble-out: rgba(56, 201, 155, 0.78);
+        /* white text needs ~5:1 here: a lighter green fails WCAG AA */
+        --simplex-bubble-out: rgba(26, 122, 92, 0.95);
       }
 
       .mobile-bar {
